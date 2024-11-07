@@ -62,6 +62,14 @@ type model struct {
 	ollamaRunning      bool
 }
 
+func loadFileContext(filePath string) (string, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file %s: %w", filePath, err)
+	}
+	return string(content), nil
+}
+
 func setupTextarea() textarea.Model {
 	ta := textarea.New()
 	ta.Placeholder = "Ask something..."
@@ -281,12 +289,12 @@ func sendChatMessage(m *model) tea.Cmd {
 			return nil
 		}
 
-		code, err := generateCode(m.currentUserMessage)
+		code, err := generateCode(m.currentUserMessage, "/home/cvberscape/code/newagentui/repomix-output.txt")
 		if err != nil {
 			return errMsg(err)
 		}
 
-		testResponse, err := testCode(code)
+		testResponse, err := testCode(code, "/home/cvberscape/code/newagentui/repomix-output.txt")
 		if err != nil {
 			return errMsg(err)
 		}
@@ -334,16 +342,15 @@ type OllamaModel struct {
 	} `json:"details"`
 }
 
-func requestOllama(messages []map[string]string, model string, agentType string) (string, error) {
+func requestOllama(messages []map[string]string, model string, agentType string, context string) (string, error) {
 	apiURL := "http://localhost:11434/api/chat"
 
 	var systemMessage map[string]string
-
 	switch agentType {
 	case "assistant":
 		systemMessage = map[string]string{
 			"role":    "system",
-			"content": "You are an assistant tasked with generating code based on the user's prompt. Be creative and provide the best solution possible. Your response should always be a full code file and no text explaining your decisions, i repeat your responses do NOT contain plaintext",
+			"content": fmt.Sprintf("You are an assistant tasked with generating code based on the user's prompt. Use the following context to generate the best solution. Context: %s", context),
 		}
 	case "tester":
 		systemMessage = map[string]string{
@@ -434,18 +441,54 @@ func FormatSizeGB(size int64) string {
 	return fmt.Sprintf("%.1f GB", gb)
 }
 
-func generateCode(request string) (string, error) {
-	messages := []map[string]string{
-		{"role": "user", "content": request},
+func retrieveRelevantSections(query, filePath string) (string, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file %s: %w", filePath, err)
 	}
-	return requestOllama(messages, "llama3.1", "assistant")
+
+	var relevantSections strings.Builder
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, query) {
+			relevantSections.WriteString(line + "\n")
+		}
+	}
+
+	return relevantSections.String(), nil
 }
 
-func testCode(code string) (string, error) {
+func generateCode(request, filePath string) (string, error) {
+	context, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read context file: %w", err)
+	}
+
+	formattedContext := fmt.Sprintf("Repository Structure:\n%s", string(context))
+
+	fullContext := formattedContext + "\n" + request
+
+	messages := []map[string]string{
+		{"role": "system", "content": fullContext},
+		{"role": "user", "content": request},
+	}
+
+	return requestOllama(messages, "llama3.1", "assistant", fullContext)
+}
+
+func testCode(code string, filePath string) (string, error) {
+	context, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read context file: %w", err)
+	}
+
+	formattedContext := fmt.Sprintf("Repository Structure:\n%s", string(context))
+
 	messages := []map[string]string{
 		{"role": "user", "content": code},
 	}
-	return requestOllama(messages, "llama3.2", "tester")
+
+	return requestOllama(messages, "llama3.2", "tester", formattedContext)
 }
 
 type ClipboardBackend int
