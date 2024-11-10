@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -57,9 +58,14 @@ type model struct {
 	width              int
 	height             int
 	loading            bool
-	viewMode           viewMode
 	renderer           *glamour.TermRenderer
 	ollamaRunning      bool
+	modelVersion       *huh.Input
+	systemPrompt       *huh.Input
+	contextFilePath    *huh.Input
+	configForm         *huh.Form // To manage the form state
+	viewMode           viewMode
+	formActive         bool // Add this new field
 }
 
 func loadFileContext(filePath string) (string, error) {
@@ -68,6 +74,28 @@ func loadFileContext(filePath string) (string, error) {
 		return "", fmt.Errorf("failed to read file %s: %w", filePath, err)
 	}
 	return string(content), nil
+}
+
+func createConfigForm() *huh.Form {
+	var modelVersion, systemPrompt, contextFilePath string
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Model Version").
+				Value(&modelVersion),
+
+			huh.NewInput().
+				Title("System Prompt").
+				Value(&systemPrompt),
+
+			huh.NewInput().
+				Title("Context File Path").
+				Value(&contextFilePath),
+		),
+	).WithShowHelp(false)
+
+	return form
 }
 
 func setupTextarea() textarea.Model {
@@ -105,6 +133,11 @@ func InitialModel() *model {
 		table.WithFocused(true),
 	)
 
+	// Initialize form fields with empty inputs
+	modelVersion := huh.NewInput()
+	systemPrompt := huh.NewInput()
+	contextFilePath := huh.NewInput()
+
 	m := &model{
 		userMessages:       make([]string, 0),
 		assistantResponses: make([]string, 0),
@@ -116,6 +149,11 @@ func InitialModel() *model {
 		renderer:           renderer,
 		viewMode:           ChatView,
 		ollamaRunning:      false,
+		modelVersion:       modelVersion,
+		systemPrompt:       systemPrompt,
+		contextFilePath:    contextFilePath,
+		configForm:         createConfigForm(),
+		formActive:         false,
 	}
 
 	m.updateTextareaIndicatorColor()
@@ -178,18 +216,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-		case "esc":
-			switch m.viewMode {
-			case InsertView:
-				m.viewMode = ChatView
-				m.textarea.Blur()
-			case ModelView:
-				m.viewMode = ChatView
+		case "ctrl+f":
+			if m.viewMode == ChatView {
+				m.formActive = true
+				m.viewMode = InsertView
+				m.textarea.Blur() // Disable textarea input
+				return m, m.configForm.Init()
 			}
+
+		case "esc":
+			m.viewMode = ChatView
+			m.formActive = false
+			m.textarea.Focus() // Re-enable textarea input
 			return m, nil
 
 		case "enter":
-			if m.viewMode == InsertView {
+			if m.viewMode == InsertView && !m.formActive {
 				m.currentUserMessage = m.textarea.Value()
 				m.textarea.Reset()
 				m.loading = true
@@ -238,6 +280,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modelTable, cmd = m.modelTable.Update(msg)
 	}
 
+	if m.formActive {
+		var formCmd tea.Cmd
+		updatedForm, formCmd := m.configForm.Update(msg)
+		m.configForm = updatedForm.(*huh.Form) // Type assertion here
+		return m, formCmd
+	}
+
 	return m, cmd
 }
 
@@ -247,6 +296,10 @@ func (m model) View() string {
 		status += "Running"
 	} else {
 		status += "Stopped"
+	}
+
+	if m.formActive {
+		return m.configForm.View()
 	}
 
 	indicator := m.indicatorStyle().Render(status)
@@ -289,12 +342,12 @@ func sendChatMessage(m *model) tea.Cmd {
 			return nil
 		}
 
-		code, err := generateCode(m.currentUserMessage, "/home/cvberscape/code/newagentui/repomix-output.txt")
+		code, err := generateCode(m.currentUserMessage, "/home/cvberscape/code/old/newagentui/repomix-output.txt")
 		if err != nil {
 			return errMsg(err)
 		}
 
-		testResponse, err := testCode(code, "/home/cvberscape/code/newagentui/repomix-output.txt")
+		testResponse, err := testCode(code, "/home/cvberscape/code/old/newagentui/repomix-output.txt")
 		if err != nil {
 			return errMsg(err)
 		}
