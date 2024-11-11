@@ -47,29 +47,31 @@ func (m *model) indicatorStyle() lipgloss.Style {
 }
 
 type model struct {
-	userMessages       []string
-	assistantResponses []string
-	testerResponses    []string
-	currentUserMessage string
-	err                error
-	textarea           textarea.Model
-	viewport           viewport.Model
-	modelTable         table.Model
-	width              int
-	height             int
-	loading            bool
-	renderer           *glamour.TermRenderer
-	ollamaRunning      bool
-	config             ChatConfig // New field to store form values
-	configForm         *huh.Form
-	viewMode           viewMode
-	formActive         bool
+	userMessages        []string
+	assistantResponses  []string
+	testerResponses     []string
+	conversationHistory []map[string]string
+	currentUserMessage  string
+	err                 error
+	textarea            textarea.Model
+	viewport            viewport.Model
+	modelTable          table.Model
+	width               int
+	height              int
+	loading             bool
+	renderer            *glamour.TermRenderer
+	ollamaRunning       bool
+	config              ChatConfig
+	configForm          *huh.Form
+	viewMode            viewMode
+	formActive          bool
 }
 
 type ChatConfig struct {
 	ModelVersion    string
 	SystemPrompt    string
 	ContextFilePath string
+	Tokens          string
 }
 
 func loadFileContext(filePath string) (string, error) {
@@ -80,7 +82,6 @@ func loadFileContext(filePath string) (string, error) {
 	return string(content), nil
 }
 
-// Modify the createConfigForm function to accept an existing config
 func createConfigForm(config *ChatConfig) *huh.Form {
 	form := huh.NewForm(
 		huh.NewGroup(
@@ -95,6 +96,10 @@ func createConfigForm(config *ChatConfig) *huh.Form {
 			huh.NewInput().
 				Title("Context File Path").
 				Value(&config.ContextFilePath),
+
+			huh.NewInput().
+				Title("Input Tokens").
+				Value(&config.Tokens),
 		),
 	).WithShowHelp(false)
 
@@ -142,7 +147,6 @@ func InitialModel() *model {
 		ContextFilePath: "",
 	}
 
-	// Create form with the initial config
 	form := createConfigForm(config)
 
 	m := &model{
@@ -222,14 +226,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.viewMode == ChatView {
 				m.formActive = true
 				m.viewMode = InsertView
-				m.textarea.Blur()                          // Disable textarea input
-				m.configForm = createConfigForm(&m.config) // Recreate form with current config
+				m.textarea.Blur()
+				m.configForm = createConfigForm(&m.config)
 				return m, m.configForm.Init()
 			}
 		case "esc":
 			m.viewMode = ChatView
 			m.formActive = false
-			m.textarea.Focus() // Re-enable textarea input
+			m.textarea.Focus()
 			return m, nil
 		case "enter":
 			if m.viewMode == InsertView && !m.formActive {
@@ -269,16 +273,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 	}
 
-	// Form update logic
 	if m.formActive {
 		updatedModel, formCmd := m.configForm.Update(msg)
 		m.configForm = updatedModel.(*huh.Form)
 
-		// Check if the form has been submitted
 		if m.configForm.State == huh.StateCompleted {
 			m.formActive = false
 			m.viewMode = ChatView
-			m.textarea.Focus() // Re-enable textarea input
+			m.textarea.Focus()
 			m.updateViewport()
 			return m, nil
 		}
@@ -286,7 +288,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, formCmd
 	}
 
-	// Handle updates for different view modes
 	switch m.viewMode {
 	case InsertView:
 		m.textarea, cmd = m.textarea.Update(msg)
@@ -349,15 +350,36 @@ func sendChatMessage(m *model) tea.Cmd {
 			return nil
 		}
 
-		code, err := generateCode(m.currentUserMessage, m)
+		m.conversationHistory = append(m.conversationHistory, map[string]string{
+			"role":    "user",
+			"content": m.currentUserMessage,
+		})
+
+		messagesForAssistant := make([]map[string]string, len(m.conversationHistory))
+		copy(messagesForAssistant, m.conversationHistory)
+
+		code, err := generateCode(messagesForAssistant, m)
 		if err != nil {
 			return errMsg(err)
 		}
 
-		testResponse, err := testCode(code, m)
+		m.conversationHistory = append(m.conversationHistory, map[string]string{
+			"role":    "assistant",
+			"content": code,
+		})
+
+		messagesForTester := make([]map[string]string, len(m.conversationHistory))
+		copy(messagesForTester, m.conversationHistory)
+
+		testResponse, err := testCode(messagesForTester, m)
 		if err != nil {
 			return errMsg(err)
 		}
+
+		m.conversationHistory = append(m.conversationHistory, map[string]string{
+			"role":    "tester",
+			"content": testResponse,
+		})
 
 		m.assistantResponses = append(m.assistantResponses, code)
 		m.testerResponses = append(m.testerResponses, testResponse)
@@ -371,19 +393,12 @@ func sendChatMessage(m *model) tea.Cmd {
 
 func (m *model) updateViewport() {
 	var conversation strings.Builder
-	for i := 0; i < len(m.userMessages); i++ {
-		conversation.WriteString("**User:**\n\n" + m.userMessages[i] + "\n\n")
-		if i < len(m.assistantResponses) {
-			conversation.WriteString("**Assistant:**\n\n" + m.assistantResponses[i] + "\n\n")
-		}
-		if i < len(m.testerResponses) {
-			conversation.WriteString("**Tester:**\n\n" + m.testerResponses[i] + "\n\n")
-		}
+	for _, msg := range m.conversationHistory {
+		conversation.WriteString(fmt.Sprintf("**%s:**\n\n%s\n\n", msg["role"], msg["content"]))
 	}
 
 	renderedContent, err := m.renderer.Render(conversation.String())
 	if err != nil {
-		fmt.Printf("Error rendering content: %v\n", err)
 		return
 	}
 	m.viewport.SetContent(renderedContent)
@@ -402,46 +417,26 @@ type OllamaModel struct {
 	} `json:"details"`
 }
 
-func requestOllama(messages []map[string]string, config ChatConfig, agentType string, context string) (string, error) {
+func requestOllama(messages []map[string]string, config ChatConfig) (string, error) {
 	apiURL := "http://localhost:11434/api/chat"
 
-	var systemMessage map[string]string
-	switch agentType {
-	case "assistant":
-		systemPrompt := config.SystemPrompt
-		if systemPrompt == "" {
-			systemPrompt = fmt.Sprintf("You are an assistant tasked with generating code based on the user's prompt. Use the following context to generate the best solution. Context: %s", context)
-		}
-		systemMessage = map[string]string{
-			"role":    "system",
-			"content": systemPrompt,
-		}
-	case "tester":
-		systemMessage = map[string]string{
-			"role":    "system",
-			"content": "You are a code tester tasked with reviewing the generated code for potential bugs or issues. Identify and highlight any issues or improvements needed.",
-		}
-	default:
-		systemMessage = map[string]string{
-			"role":    "system",
-			"content": "You are a helpful assistant. Please respond concisely and professionally.",
-		}
+	options := map[string]interface{}{
+		"num_ctx": 16384,
 	}
-
-	messages = append([]map[string]string{systemMessage}, messages...)
 
 	requestBody, err := json.Marshal(map[string]interface{}{
 		"model":    config.ModelVersion,
 		"messages": messages,
 		"stream":   false,
+		"options":  options,
 	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
 	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(requestBody))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -449,7 +444,7 @@ func requestOllama(messages []map[string]string, config ChatConfig, agentType st
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -459,7 +454,7 @@ func requestOllama(messages []map[string]string, config ChatConfig, agentType st
 
 	var rawResponse map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&rawResponse); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	if message, ok := rawResponse["message"].(map[string]interface{}); ok {
@@ -468,7 +463,7 @@ func requestOllama(messages []map[string]string, config ChatConfig, agentType st
 		}
 	}
 
-	return "", fmt.Errorf("unexpected response format: %+v", rawResponse)
+	return "", fmt.Errorf("unexpected response format or empty response: %+v", rawResponse)
 }
 
 func fetchModels() ([]OllamaModel, error) {
@@ -522,9 +517,8 @@ func retrieveRelevantSections(query, filePath string) (string, error) {
 	return relevantSections.String(), nil
 }
 
-func generateCode(request string, m *model) (string, error) {
+func generateCode(messages []map[string]string, m *model) (string, error) {
 	var context string
-
 	if m.config.ContextFilePath != "" {
 		contextBytes, err := os.ReadFile(m.config.ContextFilePath)
 		if err != nil {
@@ -532,7 +526,6 @@ func generateCode(request string, m *model) (string, error) {
 		}
 		context = string(contextBytes)
 	} else {
-		// Fallback to default context file
 		contextBytes, err := os.ReadFile("/home/cvberscape/code/old/newagentui/repomix-output.txt")
 		if err != nil {
 			return "", fmt.Errorf("failed to read context file: %w", err)
@@ -540,42 +533,53 @@ func generateCode(request string, m *model) (string, error) {
 		context = string(contextBytes)
 	}
 
-	formattedContext := fmt.Sprintf("Repository Structure:\n%s", context)
-	fullContext := formattedContext + "\n" + request
-
-	messages := []map[string]string{
-		{"role": "system", "content": fullContext},
-		{"role": "user", "content": request},
+	systemPrompt := m.config.SystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = fmt.Sprintf("You are an assistant tasked with generating code based on the user's prompt. Use the following context to generate the best solution. Context: %s", context)
 	}
 
-	return requestOllama(messages, m.config, "assistant", fullContext)
+	systemMessage := map[string]string{
+		"role":    "system",
+		"content": systemPrompt,
+	}
+	messagesWithSystem := append([]map[string]string{systemMessage}, messages...)
+
+	return requestOllama(messagesWithSystem, m.config)
 }
 
-func testCode(code string, m *model) (string, error) {
-	var context string
-
-	if m.config.ContextFilePath != "" {
-		contextBytes, err := os.ReadFile(m.config.ContextFilePath)
-		if err != nil {
-			return "", fmt.Errorf("failed to read context file: %w", err)
+func testCode(messages []map[string]string, m *model) (string, error) {
+	assistantCode := ""
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i]["role"] == "assistant" {
+			assistantCode = messages[i]["content"]
+			break
 		}
-		context = string(contextBytes)
-	} else {
-		// Fallback to default context file
-		contextBytes, err := os.ReadFile("/home/cvberscape/code/old/newagentui/repomix-output.txt")
-		if err != nil {
-			return "", fmt.Errorf("failed to read context file: %w", err)
-		}
-		context = string(contextBytes)
 	}
 
-	formattedContext := fmt.Sprintf("Repository Structure:\n%s", context)
-
-	messages := []map[string]string{
-		{"role": "user", "content": code},
+	if assistantCode == "" {
+		return "No code for agent to test", nil
 	}
 
-	return requestOllama(messages, m.config, "tester", formattedContext)
+	codeBlocks := extractCodeBlocks(assistantCode)
+	if len(codeBlocks) == 0 {
+		return "No code for agent to test", nil
+	}
+
+	codeToTest := strings.Join(codeBlocks, "\n")
+
+	systemPrompt := "You are a code tester tasked with reviewing the following code for potential bugs or issues. Identify and highlight any issues or improvements needed."
+
+	systemMessage := map[string]string{
+		"role":    "system",
+		"content": systemPrompt,
+	}
+
+	messagesForTester := []map[string]string{
+		systemMessage,
+		{"role": "user", "content": codeToTest},
+	}
+
+	return requestOllama(messagesForTester, m.config)
 }
 
 type ClipboardBackend int
