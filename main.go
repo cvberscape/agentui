@@ -60,12 +60,16 @@ type model struct {
 	loading            bool
 	renderer           *glamour.TermRenderer
 	ollamaRunning      bool
-	modelVersion       *huh.Input
-	systemPrompt       *huh.Input
-	contextFilePath    *huh.Input
-	configForm         *huh.Form // To manage the form state
+	config             ChatConfig // New field to store form values
+	configForm         *huh.Form
 	viewMode           viewMode
-	formActive         bool // Add this new field
+	formActive         bool
+}
+
+type ChatConfig struct {
+	ModelVersion    string
+	SystemPrompt    string
+	ContextFilePath string
 }
 
 func loadFileContext(filePath string) (string, error) {
@@ -76,22 +80,21 @@ func loadFileContext(filePath string) (string, error) {
 	return string(content), nil
 }
 
-func createConfigForm() *huh.Form {
-	var modelVersion, systemPrompt, contextFilePath string
-
+// Modify the createConfigForm function to accept an existing config
+func createConfigForm(config *ChatConfig) *huh.Form {
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Model Version").
-				Value(&modelVersion),
+				Value(&config.ModelVersion),
 
 			huh.NewInput().
 				Title("System Prompt").
-				Value(&systemPrompt),
+				Value(&config.SystemPrompt),
 
 			huh.NewInput().
 				Title("Context File Path").
-				Value(&contextFilePath),
+				Value(&config.ContextFilePath),
 		),
 	).WithShowHelp(false)
 
@@ -133,10 +136,14 @@ func InitialModel() *model {
 		table.WithFocused(true),
 	)
 
-	// Initialize form fields with empty inputs
-	modelVersion := huh.NewInput()
-	systemPrompt := huh.NewInput()
-	contextFilePath := huh.NewInput()
+	config := &ChatConfig{
+		ModelVersion:    "llama3.1",
+		SystemPrompt:    "",
+		ContextFilePath: "",
+	}
+
+	// Create form with the initial config
+	form := createConfigForm(config)
 
 	m := &model{
 		userMessages:       make([]string, 0),
@@ -149,10 +156,8 @@ func InitialModel() *model {
 		renderer:           renderer,
 		viewMode:           ChatView,
 		ollamaRunning:      false,
-		modelVersion:       modelVersion,
-		systemPrompt:       systemPrompt,
-		contextFilePath:    contextFilePath,
-		configForm:         createConfigForm(),
+		config:             *config,
+		configForm:         form,
 		formActive:         false,
 	}
 
@@ -192,44 +197,40 @@ func (m *model) updateTextareaIndicatorColor() {
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+z":
 			return m, tea.Quit
-
 		case "o":
 			if m.viewMode != InsertView {
 				return m, m.toggleOllamaServe()
 			}
-
 		case "m":
 			if m.viewMode == ChatView {
 				m.viewMode = ModelView
 				return m, fetchModelsCmd()
 			}
-
 		case "i":
 			if m.viewMode == ChatView {
 				m.viewMode = InsertView
 				m.textarea.Focus()
 				return m, nil
 			}
-
 		case "ctrl+f":
 			if m.viewMode == ChatView {
 				m.formActive = true
 				m.viewMode = InsertView
-				m.textarea.Blur() // Disable textarea input
+				m.textarea.Blur()                          // Disable textarea input
+				m.configForm = createConfigForm(&m.config) // Recreate form with current config
 				return m, m.configForm.Init()
 			}
-
 		case "esc":
 			m.viewMode = ChatView
 			m.formActive = false
 			m.textarea.Focus() // Re-enable textarea input
 			return m, nil
-
 		case "enter":
 			if m.viewMode == InsertView && !m.formActive {
 				m.currentUserMessage = m.textarea.Value()
@@ -239,14 +240,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textarea.Blur()
 				return m, sendChatMessage(m)
 			}
-
 		case "j":
 			if m.viewMode == ModelView {
 				m.modelTable.MoveDown(1)
 			} else if m.viewMode == ChatView {
 				m.viewport.LineDown(1)
 			}
-
 		case "k":
 			if m.viewMode == ModelView {
 				m.modelTable.MoveUp(1)
@@ -254,16 +253,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.LineUp(1)
 			}
 		}
-
 	case modelsMsg:
 		m.populateModelTable(msg)
-
 	case errMsg:
 		m.loading = false
 		m.err = msg
 		m.updateViewport()
 		return m, nil
-
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.textarea.SetWidth(m.width)
@@ -273,18 +269,29 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 	}
 
+	// Form update logic
+	if m.formActive {
+		updatedModel, formCmd := m.configForm.Update(msg)
+		m.configForm = updatedModel.(*huh.Form)
+
+		// Check if the form has been submitted
+		if m.configForm.State == huh.StateCompleted {
+			m.formActive = false
+			m.viewMode = ChatView
+			m.textarea.Focus() // Re-enable textarea input
+			m.updateViewport()
+			return m, nil
+		}
+
+		return m, formCmd
+	}
+
+	// Handle updates for different view modes
 	switch m.viewMode {
 	case InsertView:
 		m.textarea, cmd = m.textarea.Update(msg)
 	case ModelView:
 		m.modelTable, cmd = m.modelTable.Update(msg)
-	}
-
-	if m.formActive {
-		var formCmd tea.Cmd
-		updatedForm, formCmd := m.configForm.Update(msg)
-		m.configForm = updatedForm.(*huh.Form) // Type assertion here
-		return m, formCmd
 	}
 
 	return m, cmd
@@ -342,12 +349,12 @@ func sendChatMessage(m *model) tea.Cmd {
 			return nil
 		}
 
-		code, err := generateCode(m.currentUserMessage, "/home/cvberscape/code/old/newagentui/repomix-output.txt")
+		code, err := generateCode(m.currentUserMessage, m)
 		if err != nil {
 			return errMsg(err)
 		}
 
-		testResponse, err := testCode(code, "/home/cvberscape/code/old/newagentui/repomix-output.txt")
+		testResponse, err := testCode(code, m)
 		if err != nil {
 			return errMsg(err)
 		}
@@ -395,15 +402,19 @@ type OllamaModel struct {
 	} `json:"details"`
 }
 
-func requestOllama(messages []map[string]string, model string, agentType string, context string) (string, error) {
+func requestOllama(messages []map[string]string, config ChatConfig, agentType string, context string) (string, error) {
 	apiURL := "http://localhost:11434/api/chat"
 
 	var systemMessage map[string]string
 	switch agentType {
 	case "assistant":
+		systemPrompt := config.SystemPrompt
+		if systemPrompt == "" {
+			systemPrompt = fmt.Sprintf("You are an assistant tasked with generating code based on the user's prompt. Use the following context to generate the best solution. Context: %s", context)
+		}
 		systemMessage = map[string]string{
 			"role":    "system",
-			"content": fmt.Sprintf("You are an assistant tasked with generating code based on the user's prompt. Use the following context to generate the best solution. Context: %s", context),
+			"content": systemPrompt,
 		}
 	case "tester":
 		systemMessage = map[string]string{
@@ -420,7 +431,7 @@ func requestOllama(messages []map[string]string, model string, agentType string,
 	messages = append([]map[string]string{systemMessage}, messages...)
 
 	requestBody, err := json.Marshal(map[string]interface{}{
-		"model":    model,
+		"model":    config.ModelVersion,
 		"messages": messages,
 		"stream":   false,
 	})
@@ -511,14 +522,25 @@ func retrieveRelevantSections(query, filePath string) (string, error) {
 	return relevantSections.String(), nil
 }
 
-func generateCode(request, filePath string) (string, error) {
-	context, err := os.ReadFile(filePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read context file: %w", err)
+func generateCode(request string, m *model) (string, error) {
+	var context string
+
+	if m.config.ContextFilePath != "" {
+		contextBytes, err := os.ReadFile(m.config.ContextFilePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read context file: %w", err)
+		}
+		context = string(contextBytes)
+	} else {
+		// Fallback to default context file
+		contextBytes, err := os.ReadFile("/home/cvberscape/code/old/newagentui/repomix-output.txt")
+		if err != nil {
+			return "", fmt.Errorf("failed to read context file: %w", err)
+		}
+		context = string(contextBytes)
 	}
 
-	formattedContext := fmt.Sprintf("Repository Structure:\n%s", string(context))
-
+	formattedContext := fmt.Sprintf("Repository Structure:\n%s", context)
 	fullContext := formattedContext + "\n" + request
 
 	messages := []map[string]string{
@@ -526,22 +548,34 @@ func generateCode(request, filePath string) (string, error) {
 		{"role": "user", "content": request},
 	}
 
-	return requestOllama(messages, "llama3.1", "assistant", fullContext)
+	return requestOllama(messages, m.config, "assistant", fullContext)
 }
 
-func testCode(code string, filePath string) (string, error) {
-	context, err := os.ReadFile(filePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read context file: %w", err)
+func testCode(code string, m *model) (string, error) {
+	var context string
+
+	if m.config.ContextFilePath != "" {
+		contextBytes, err := os.ReadFile(m.config.ContextFilePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read context file: %w", err)
+		}
+		context = string(contextBytes)
+	} else {
+		// Fallback to default context file
+		contextBytes, err := os.ReadFile("/home/cvberscape/code/old/newagentui/repomix-output.txt")
+		if err != nil {
+			return "", fmt.Errorf("failed to read context file: %w", err)
+		}
+		context = string(contextBytes)
 	}
 
-	formattedContext := fmt.Sprintf("Repository Structure:\n%s", string(context))
+	formattedContext := fmt.Sprintf("Repository Structure:\n%s", context)
 
 	messages := []map[string]string{
 		{"role": "user", "content": code},
 	}
 
-	return requestOllama(messages, "llama3.2", "tester", formattedContext)
+	return requestOllama(messages, m.config, "tester", formattedContext)
 }
 
 type ClipboardBackend int
