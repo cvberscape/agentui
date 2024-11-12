@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -40,6 +41,8 @@ const (
 	ModelView
 	ConfirmDeleteView
 	AvailableModelsView
+	ParameterSizesView
+	DownloadingView
 )
 
 var (
@@ -48,8 +51,15 @@ var (
 )
 
 func (m *model) indicatorStyle() lipgloss.Style {
+	var color lipgloss.Color
+	if m.ollamaRunning {
+		color = runningIndicatorColor
+	} else {
+		color = stoppedIndicatorColor
+	}
+
 	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FF0000")).
+		Foreground(color).
 		Background(lipgloss.Color("#000000")).
 		Border(lipgloss.HiddenBorder()).
 		Padding(0)
@@ -66,6 +76,7 @@ type model struct {
 	viewport               viewport.Model
 	modelTable             table.Model
 	availableTable         table.Model
+	parameterSizesTable    table.Model
 	width                  int
 	height                 int
 	loading                bool
@@ -78,6 +89,9 @@ type model struct {
 	confirmDeleteModelName string
 	confirmForm            *huh.Form
 	confirmResult          bool
+	availableModels        []AvailableModel
+	selectedAvailableModel AvailableModel
+	spinner                spinner.Model
 }
 
 type ChatConfig struct {
@@ -156,6 +170,10 @@ func InitialModel() *model {
 		glamour.WithWordWrap(vp.Width),
 	)
 
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00"))
+
 	columns := []table.Column{
 		{Title: "Name", Width: 30},
 		{Title: "Parameter Size", Width: 15},
@@ -182,17 +200,19 @@ func InitialModel() *model {
 	defaultTokens := "16384"
 
 	m := &model{
-		userMessages:       make([]string, 0),
-		assistantResponses: make([]string, 0),
-		testerResponses:    make([]string, 0),
-		currentUserMessage: "",
-		textarea:           ta,
-		viewport:           vp,
-		modelTable:         modelTable,
-		availableTable:     availableTable,
-		renderer:           renderer,
-		viewMode:           ChatView,
-		ollamaRunning:      false,
+		userMessages:        make([]string, 0),
+		assistantResponses:  make([]string, 0),
+		testerResponses:     make([]string, 0),
+		conversationHistory: []map[string]string{},
+		currentUserMessage:  "",
+		textarea:            ta,
+		viewport:            vp,
+		modelTable:          modelTable,
+		availableTable:      availableTable,
+		spinner:             sp,
+		renderer:            renderer,
+		viewMode:            ChatView,
+		ollamaRunning:       false,
 		config: ChatConfig{
 			ModelVersion:    "llama3.1",
 			SystemPrompt:    defaultSystemPrompt,
@@ -209,7 +229,7 @@ func InitialModel() *model {
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, tea.EnterAltScreen, fetchModelsCmd())
+	return tea.Batch(textarea.Blink, tea.EnterAltScreen, fetchModelsCmd(), m.spinner.Tick)
 }
 
 func (m *model) toggleOllamaServe() tea.Cmd {
@@ -221,7 +241,6 @@ func (m *model) toggleOllamaServe() tea.Cmd {
 		}
 		m.ollamaRunning = !m.ollamaRunning
 		m.updateTextareaIndicatorColor()
-		m.updateViewport()
 		return tea.WindowSizeMsg{Width: m.width, Height: m.height}
 	}
 }
@@ -270,7 +289,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.configForm.Init()
 			}
 		case "esc":
-			if m.viewMode == ConfirmDeleteView || m.viewMode == AvailableModelsView {
+			if m.viewMode == ConfirmDeleteView || m.viewMode == AvailableModelsView || m.viewMode == ParameterSizesView || m.viewMode == DownloadingView {
 				m.viewMode = ModelView
 				m.confirmDeleteModelName = ""
 				return m, fetchModelsCmd()
@@ -303,22 +322,54 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				modelName := selectedRow[0]
-				return m, downloadModelCmd(modelName)
+				var selectedModel AvailableModel
+				for _, mdl := range m.availableModels {
+					if mdl.Name == modelName {
+						selectedModel = mdl
+						break
+					}
+				}
+				if selectedModel.Name == "" {
+					return m, nil
+				}
+				m.selectedAvailableModel = selectedModel
+				m.populateParameterSizesTable(selectedModel.Sizes)
+				m.viewMode = ParameterSizesView
+				return m, nil
+			} else if m.viewMode == ParameterSizesView {
+				selectedRow := m.parameterSizesTable.SelectedRow()
+				if selectedRow == nil {
+					return m, nil
+				}
+				size := selectedRow[0]
+				modelName := m.selectedAvailableModel.Name
+				fullModelName := modelName
+				if size != "" {
+					fullModelName = fmt.Sprintf("%s:%s", modelName, size)
+				}
+				m.viewMode = DownloadingView
+				return m, tea.Batch(downloadModelCmd(fullModelName), m.spinner.Tick)
 			}
 		case "j":
-			if m.viewMode == ModelView {
+			switch m.viewMode {
+			case ModelView:
 				m.modelTable.MoveDown(1)
-			} else if m.viewMode == AvailableModelsView {
+			case AvailableModelsView:
 				m.availableTable.MoveDown(1)
-			} else if m.viewMode == ChatView {
+			case ParameterSizesView:
+				m.parameterSizesTable.MoveDown(1)
+			case ChatView:
 				m.viewport.LineDown(1)
 			}
 		case "k":
-			if m.viewMode == ModelView {
+			switch m.viewMode {
+			case ModelView:
 				m.modelTable.MoveUp(1)
-			} else if m.viewMode == AvailableModelsView {
+			case AvailableModelsView:
 				m.availableTable.MoveUp(1)
-			} else if m.viewMode == ChatView {
+			case ParameterSizesView:
+				m.parameterSizesTable.MoveUp(1)
+			case ChatView:
 				m.viewport.LineUp(1)
 			}
 		case "d":
@@ -341,17 +392,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case modelsMsg:
 		m.populateModelTable(msg)
 	case availableModelsMsg:
+		m.availableModels = msg
 		m.populateAvailableModelsTable(msg)
 	case modelDeletedMsg:
 		return m, fetchModelsCmd()
 	case modelDownloadedMsg:
+		m.viewMode = ModelView
 		return m, fetchModelsCmd()
-	case scrapeCompletedMsg:
-		return m, fetchAvailableModelsCmd()
 	case errMsg:
 		m.loading = false
 		m.err = msg
-		m.updateViewport()
+		m.modelTable.SetRows(nil)
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -359,11 +410,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Width = m.width
 		m.viewport.Height = m.height - 3
 		m.updateViewport()
-		m.viewport.GotoBottom()
 
 		m.availableTable.SetWidth(m.width)
 		m.availableTable.SetHeight(m.height)
-
+		m.parameterSizesTable.SetWidth(m.width)
+		m.parameterSizesTable.SetHeight(m.height)
+	case spinner.TickMsg:
+		var spCmd tea.Cmd
+		m.spinner, spCmd = m.spinner.Update(msg)
+		return m, spCmd
 	}
 
 	if m.viewMode == ConfirmDeleteView {
@@ -406,20 +461,36 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modelTable, cmd = m.modelTable.Update(msg)
 	case AvailableModelsView:
 		m.availableTable, cmd = m.availableTable.Update(msg)
+	case ParameterSizesView:
+		m.parameterSizesTable, cmd = m.parameterSizesTable.Update(msg)
+	case DownloadingView:
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	}
 
 	return m, cmd
 }
 
 func (m model) View() string {
-	status := "Ollama Serve: "
-	if m.ollamaRunning {
-		status += "Running"
-	} else {
-		status += "Stopped"
-	}
+	return m.ViewWithoutError()
+}
 
-	indicator := m.indicatorStyle().Render(status)
+func (m model) ViewWithoutError() string {
+	if m.viewMode == ModelView {
+		var status string
+		if m.ollamaRunning {
+			status = "Ollama Serve: Running"
+		} else {
+			status = "Ollama Serve: Stopped"
+		}
+		indicator := m.indicatorStyle().Render(status)
+
+		if len(m.modelTable.Rows()) == 0 {
+			return indicator + "\nNo models available."
+		}
+
+		return indicator + "\n" + m.modelTable.View()
+	}
 
 	if m.formActive {
 		return m.configForm.View()
@@ -429,10 +500,12 @@ func (m model) View() string {
 	case ConfirmDeleteView:
 		message := fmt.Sprintf("Are you sure you want to delete model '%s'? This action cannot be undone.", m.confirmDeleteModelName)
 		return message + "\n\n" + m.confirmForm.View()
-	case ModelView:
-		return indicator + "\n" + m.modelTable.View()
 	case AvailableModelsView:
 		return "Available Ollama Models:\n\n" + m.availableTable.View()
+	case ParameterSizesView:
+		return fmt.Sprintf("Select Parameter Size for '%s':\n\n%s", m.selectedAvailableModel.Name, m.parameterSizesTable.View())
+	case DownloadingView:
+		return fmt.Sprintf("%s Downloading model, feel free to exit this page", m.spinner.View())
 	case InsertView:
 		return m.viewport.View() + "\n" + m.textarea.View()
 	default:
@@ -475,6 +548,23 @@ func (m *model) populateAvailableModelsTable(models []AvailableModel) {
 		})
 	}
 	m.availableTable.SetRows(rows)
+}
+
+func (m *model) populateParameterSizesTable(sizes []string) {
+	var rows []table.Row
+	for _, size := range sizes {
+		rows = append(rows, table.Row{size})
+	}
+	columns := []table.Column{
+		{Title: "Available Sizes", Width: 20},
+	}
+	m.parameterSizesTable = table.New(
+		table.WithColumns(columns),
+		table.WithRows(rows),
+		table.WithFocused(true),
+	)
+	m.parameterSizesTable.SetWidth(m.width)
+	m.parameterSizesTable.SetHeight(m.height)
 }
 
 func deleteModelCmd(modelName string) tea.Cmd {
@@ -594,7 +684,7 @@ func requestOllama(messages []map[string]string, config ChatConfig) (string, err
 
 	numCtx, err := strconv.Atoi(config.Tokens)
 	if err != nil || numCtx <= 0 {
-		numCtx = 16384 // Default value
+		numCtx = 16384
 	}
 
 	options := map[string]interface{}{
@@ -879,21 +969,13 @@ func parseContent(doc *goquery.Document) []AvailableModel {
 
 func downloadModelCmd(modelName string) tea.Cmd {
 	return func() tea.Msg {
-		err := downloadModel(modelName)
+		cmd := exec.Command("ollama", "pull", modelName)
+		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return errMsg(err)
+			return errMsg(fmt.Errorf("failed to download model: %v, output: %s", err, string(output)))
 		}
 		return modelDownloadedMsg(modelName)
 	}
-}
-
-func downloadModel(modelName string) error {
-	cmd := exec.Command("ollama", "pull", modelName)
-	err := cmd.Run()
-	if err != nil {
-		return fmt.Errorf("failed to download model '%s': %v", modelName, err)
-	}
-	return nil
 }
 
 func main() {
