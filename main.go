@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -141,13 +142,9 @@ func InitialModel() *model {
 		table.WithFocused(true),
 	)
 
-	config := &ChatConfig{
-		ModelVersion:    "llama3.1",
-		SystemPrompt:    "",
-		ContextFilePath: "",
-	}
-
-	form := createConfigForm(config)
+	defaultContextFilePath := "/home/cvberscape/code/old/newagentui/repomix-output.txt"
+	defaultSystemPrompt := "You are an assistant tasked with generating code based on the user's prompt. Use the following context to generate the best solution. Context: {context}"
+	defaultTokens := "16384"
 
 	m := &model{
 		userMessages:       make([]string, 0),
@@ -160,10 +157,16 @@ func InitialModel() *model {
 		renderer:           renderer,
 		viewMode:           ChatView,
 		ollamaRunning:      false,
-		config:             *config,
-		configForm:         form,
-		formActive:         false,
+		config: ChatConfig{
+			ModelVersion:    "llama3.1",
+			SystemPrompt:    defaultSystemPrompt,
+			ContextFilePath: defaultContextFilePath,
+			Tokens:          defaultTokens,
+		},
+		formActive: false,
 	}
+
+	m.configForm = createConfigForm(&m.config)
 
 	m.updateTextareaIndicatorColor()
 	return m
@@ -420,8 +423,13 @@ type OllamaModel struct {
 func requestOllama(messages []map[string]string, config ChatConfig) (string, error) {
 	apiURL := "http://localhost:11434/api/chat"
 
+	numCtx, err := strconv.Atoi(config.Tokens)
+	if err != nil || numCtx <= 0 {
+		numCtx = 16384 // Default value
+	}
+
 	options := map[string]interface{}{
-		"num_ctx": 16384,
+		"num_ctx": numCtx,
 	}
 
 	requestBody, err := json.Marshal(map[string]interface{}{
@@ -518,25 +526,13 @@ func retrieveRelevantSections(query, filePath string) (string, error) {
 }
 
 func generateCode(messages []map[string]string, m *model) (string, error) {
-	var context string
-	if m.config.ContextFilePath != "" {
-		contextBytes, err := os.ReadFile(m.config.ContextFilePath)
-		if err != nil {
-			return "", fmt.Errorf("failed to read context file: %w", err)
-		}
-		context = string(contextBytes)
-	} else {
-		contextBytes, err := os.ReadFile("/home/cvberscape/code/old/newagentui/repomix-output.txt")
-		if err != nil {
-			return "", fmt.Errorf("failed to read context file: %w", err)
-		}
-		context = string(contextBytes)
+	contextBytes, err := os.ReadFile(m.config.ContextFilePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read context file: %w", err)
 	}
+	context := string(contextBytes)
 
-	systemPrompt := m.config.SystemPrompt
-	if systemPrompt == "" {
-		systemPrompt = fmt.Sprintf("You are an assistant tasked with generating code based on the user's prompt. Use the following context to generate the best solution. Context: %s", context)
-	}
+	systemPrompt := strings.ReplaceAll(m.config.SystemPrompt, "{context}", context)
 
 	systemMessage := map[string]string{
 		"role":    "system",
