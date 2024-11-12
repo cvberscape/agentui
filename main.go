@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -21,9 +23,13 @@ import (
 )
 
 type (
-	responseMsg string
-	errMsg      error
-	modelsMsg   []OllamaModel
+	responseMsg        string
+	errMsg             error
+	modelsMsg          []OllamaModel
+	availableModelsMsg []AvailableModel
+	modelDeletedMsg    struct{}
+	modelDownloadedMsg string
+	scrapeCompletedMsg struct{}
 )
 
 type viewMode int
@@ -32,6 +38,8 @@ const (
 	ChatView viewMode = iota
 	InsertView
 	ModelView
+	ConfirmDeleteView
+	AvailableModelsView
 )
 
 var (
@@ -48,24 +56,28 @@ func (m *model) indicatorStyle() lipgloss.Style {
 }
 
 type model struct {
-	userMessages        []string
-	assistantResponses  []string
-	testerResponses     []string
-	conversationHistory []map[string]string
-	currentUserMessage  string
-	err                 error
-	textarea            textarea.Model
-	viewport            viewport.Model
-	modelTable          table.Model
-	width               int
-	height              int
-	loading             bool
-	renderer            *glamour.TermRenderer
-	ollamaRunning       bool
-	config              ChatConfig
-	configForm          *huh.Form
-	viewMode            viewMode
-	formActive          bool
+	userMessages           []string
+	assistantResponses     []string
+	testerResponses        []string
+	conversationHistory    []map[string]string
+	currentUserMessage     string
+	err                    error
+	textarea               textarea.Model
+	viewport               viewport.Model
+	modelTable             table.Model
+	availableTable         table.Model
+	width                  int
+	height                 int
+	loading                bool
+	renderer               *glamour.TermRenderer
+	ollamaRunning          bool
+	config                 ChatConfig
+	configForm             *huh.Form
+	viewMode               viewMode
+	formActive             bool
+	confirmDeleteModelName string
+	confirmForm            *huh.Form
+	confirmResult          bool
 }
 
 type ChatConfig struct {
@@ -102,8 +114,21 @@ func createConfigForm(config *ChatConfig) *huh.Form {
 				Title("Input Tokens").
 				Value(&config.Tokens),
 		),
-	).WithShowHelp(false)
+	).WithShowHelp(true)
 
+	return form
+}
+
+func createConfirmForm(confirmResult *bool) *huh.Form {
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Confirm Deletion").
+				Affirmative("Yes").
+				Negative("No").
+				Value(confirmResult),
+		),
+	).WithShowHelp(false)
 	return form
 }
 
@@ -132,7 +157,7 @@ func InitialModel() *model {
 	)
 
 	columns := []table.Column{
-		{Title: "Name", Width: 20},
+		{Title: "Name", Width: 30},
 		{Title: "Parameter Size", Width: 15},
 		{Title: "Size (GB)", Width: 10},
 	}
@@ -142,7 +167,17 @@ func InitialModel() *model {
 		table.WithFocused(true),
 	)
 
-	defaultContextFilePath := "/home/cvberscape/code/old/newagentui/repomix-output.txt"
+	availableColumns := []table.Column{
+		{Title: "Available Models", Width: 30},
+		{Title: "Sizes", Width: 20},
+	}
+
+	availableTable := table.New(
+		table.WithColumns(availableColumns),
+		table.WithFocused(true),
+	)
+
+	defaultContextFilePath := "/path/to/your/context.txt"
 	defaultSystemPrompt := "You are an assistant tasked with generating code based on the user's prompt. Use the following context to generate the best solution. Context: {context}"
 	defaultTokens := "16384"
 
@@ -154,6 +189,7 @@ func InitialModel() *model {
 		textarea:           ta,
 		viewport:           vp,
 		modelTable:         modelTable,
+		availableTable:     availableTable,
 		renderer:           renderer,
 		viewMode:           ChatView,
 		ollamaRunning:      false,
@@ -234,6 +270,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.configForm.Init()
 			}
 		case "esc":
+			if m.viewMode == ConfirmDeleteView || m.viewMode == AvailableModelsView {
+				m.viewMode = ModelView
+				m.confirmDeleteModelName = ""
+				return m, fetchModelsCmd()
+			}
 			m.viewMode = ChatView
 			m.formActive = false
 			m.textarea.Focus()
@@ -246,22 +287,67 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewMode = ChatView
 				m.textarea.Blur()
 				return m, sendChatMessage(m)
+			} else if m.viewMode == ModelView {
+				selectedRow := m.modelTable.SelectedRow()
+				if selectedRow == nil {
+					return m, nil
+				}
+				modelName := selectedRow[0]
+				if modelName == "Add New Model" {
+					m.viewMode = AvailableModelsView
+					return m, fetchAvailableModelsCmd()
+				}
+			} else if m.viewMode == AvailableModelsView {
+				selectedRow := m.availableTable.SelectedRow()
+				if selectedRow == nil {
+					return m, nil
+				}
+				modelName := selectedRow[0]
+				return m, downloadModelCmd(modelName)
 			}
 		case "j":
 			if m.viewMode == ModelView {
 				m.modelTable.MoveDown(1)
+			} else if m.viewMode == AvailableModelsView {
+				m.availableTable.MoveDown(1)
 			} else if m.viewMode == ChatView {
 				m.viewport.LineDown(1)
 			}
 		case "k":
 			if m.viewMode == ModelView {
 				m.modelTable.MoveUp(1)
+			} else if m.viewMode == AvailableModelsView {
+				m.availableTable.MoveUp(1)
 			} else if m.viewMode == ChatView {
 				m.viewport.LineUp(1)
+			}
+		case "d":
+			if m.viewMode == ModelView {
+				selectedRow := m.modelTable.SelectedRow()
+				if selectedRow == nil {
+					return m, nil
+				}
+				modelName := selectedRow[0]
+				if modelName == "Add New Model" {
+					return m, nil
+				}
+				m.confirmDeleteModelName = modelName
+				m.viewMode = ConfirmDeleteView
+				m.confirmResult = false
+				m.confirmForm = createConfirmForm(&m.confirmResult)
+				return m, m.confirmForm.Init()
 			}
 		}
 	case modelsMsg:
 		m.populateModelTable(msg)
+	case availableModelsMsg:
+		m.populateAvailableModelsTable(msg)
+	case modelDeletedMsg:
+		return m, fetchModelsCmd()
+	case modelDownloadedMsg:
+		return m, fetchModelsCmd()
+	case scrapeCompletedMsg:
+		return m, fetchAvailableModelsCmd()
 	case errMsg:
 		m.loading = false
 		m.err = msg
@@ -274,6 +360,28 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Height = m.height - 3
 		m.updateViewport()
 		m.viewport.GotoBottom()
+
+		m.availableTable.SetWidth(m.width)
+		m.availableTable.SetHeight(m.height)
+
+	}
+
+	if m.viewMode == ConfirmDeleteView {
+		updatedModel, formCmd := m.confirmForm.Update(msg)
+		m.confirmForm = updatedModel.(*huh.Form)
+
+		if m.confirmForm.State == huh.StateCompleted {
+			m.viewMode = ModelView
+			modelName := m.confirmDeleteModelName
+			m.confirmDeleteModelName = ""
+			if m.confirmResult {
+				return m, deleteModelCmd(modelName)
+			} else {
+				return m, fetchModelsCmd()
+			}
+		}
+
+		return m, formCmd
 	}
 
 	if m.formActive {
@@ -296,6 +404,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.textarea, cmd = m.textarea.Update(msg)
 	case ModelView:
 		m.modelTable, cmd = m.modelTable.Update(msg)
+	case AvailableModelsView:
+		m.availableTable, cmd = m.availableTable.Update(msg)
 	}
 
 	return m, cmd
@@ -309,15 +419,20 @@ func (m model) View() string {
 		status += "Stopped"
 	}
 
+	indicator := m.indicatorStyle().Render(status)
+
 	if m.formActive {
 		return m.configForm.View()
 	}
 
-	indicator := m.indicatorStyle().Render(status)
-
 	switch m.viewMode {
+	case ConfirmDeleteView:
+		message := fmt.Sprintf("Are you sure you want to delete model '%s'? This action cannot be undone.", m.confirmDeleteModelName)
+		return message + "\n\n" + m.confirmForm.View()
 	case ModelView:
 		return indicator + "\n" + m.modelTable.View()
+	case AvailableModelsView:
+		return "Available Ollama Models:\n\n" + m.availableTable.View()
 	case InsertView:
 		return m.viewport.View() + "\n" + m.textarea.View()
 	default:
@@ -337,6 +452,9 @@ func fetchModelsCmd() tea.Cmd {
 
 func (m *model) populateModelTable(models []OllamaModel) {
 	var rows []table.Row
+
+	rows = append(rows, table.Row{"Add New Model", "", ""})
+
 	for _, mdl := range models {
 		rows = append(rows, table.Row{
 			mdl.Name,
@@ -345,6 +463,57 @@ func (m *model) populateModelTable(models []OllamaModel) {
 		})
 	}
 	m.modelTable.SetRows(rows)
+}
+
+func (m *model) populateAvailableModelsTable(models []AvailableModel) {
+	var rows []table.Row
+	for _, mdl := range models {
+		sizes := strings.Join(mdl.Sizes, ", ")
+		rows = append(rows, table.Row{
+			mdl.Name,
+			sizes,
+		})
+	}
+	m.availableTable.SetRows(rows)
+}
+
+func deleteModelCmd(modelName string) tea.Cmd {
+	return func() tea.Msg {
+		err := deleteModel(modelName)
+		if err != nil {
+			return errMsg(err)
+		}
+		return modelDeletedMsg{}
+	}
+}
+
+func deleteModel(modelName string) error {
+	apiURL := "http://localhost:11434/api/delete"
+
+	requestBody, err := json.Marshal(map[string]string{
+		"name": modelName,
+	})
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("DELETE", apiURL, bytes.NewBuffer(requestBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("error deleting model: %v", resp.Status)
+	}
+	return nil
 }
 
 func sendChatMessage(m *model) tea.Cmd {
@@ -578,59 +747,6 @@ func testCode(messages []map[string]string, m *model) (string, error) {
 	return requestOllama(messagesForTester, m.config)
 }
 
-type ClipboardBackend int
-
-const (
-	Wayland ClipboardBackend = iota
-	X11
-	TmuxTTY
-	Unknown
-)
-
-func detectClipboardBackend() ClipboardBackend {
-	if os.Getenv("WAYLAND_DISPLAY") != "" {
-		return Wayland
-	}
-	if os.Getenv("DISPLAY") != "" {
-		return X11
-	}
-	if os.Getenv("TMUX") != "" && os.Getenv("DISPLAY") == "" {
-		return TmuxTTY
-	}
-	return Unknown
-}
-
-func copyToClipboard(text string) error {
-	switch detectClipboardBackend() {
-	case Wayland:
-		return copyToWaylandClipboard(text)
-	case X11:
-		return copyToX11Clipboard(text)
-	case TmuxTTY:
-		return copyToTmuxClipboard(text)
-	default:
-		return fmt.Errorf("unsupported clipboard environment")
-	}
-}
-
-func copyToWaylandClipboard(text string) error {
-	cmd := exec.Command("wl-copy")
-	cmd.Stdin = bytes.NewBufferString(text)
-	return cmd.Run()
-}
-
-func copyToX11Clipboard(text string) error {
-	cmd := exec.Command("xclip", "-selection", "clipboard")
-	cmd.Stdin = bytes.NewBufferString(text)
-	return cmd.Run()
-}
-
-func copyToTmuxClipboard(text string) error {
-	loadCmd := exec.Command("tmux", "load-buffer", "-")
-	loadCmd.Stdin = bytes.NewBufferString(text)
-	return loadCmd.Run()
-}
-
 func extractCodeBlocks(input string) []string {
 	var codeBlocks []string
 	lines := strings.Split(input, "\n")
@@ -653,6 +769,131 @@ func extractCodeBlocks(input string) []string {
 	}
 
 	return codeBlocks
+}
+
+type AvailableModel struct {
+	Name  string   `json:"name"`
+	Sizes []string `json:"sizes"`
+}
+
+func fetchAvailableModelsCmd() tea.Cmd {
+	return func() tea.Msg {
+		models, err := scrapeOllamaLibrary()
+		if err != nil {
+			return errMsg(err)
+		}
+		return availableModelsMsg(models)
+	}
+}
+
+func scrapeOllamaLibrary() ([]AvailableModel, error) {
+	inputFilePath := "./code/ollama_models_html.txt"
+	outputFilePath := "./code/ollama_models.json"
+
+	os.MkdirAll("./code/", os.ModePerm)
+
+	var content []byte
+	if _, err := os.Stat(inputFilePath); err == nil {
+		content, err = os.ReadFile(inputFilePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read input file: %v", err)
+		}
+	} else {
+		url := "https://ollama.com/library"
+		response, err := http.Get(url)
+		if err != nil {
+			return nil, fmt.Errorf("failed to retrieve the page: %v", err)
+		}
+		defer response.Body.Close()
+
+		if response.StatusCode != 200 {
+			return nil, fmt.Errorf("failed to retrieve the page. Status code: %d", response.StatusCode)
+		}
+
+		content, err = io.ReadAll(response.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %v", err)
+		}
+
+		err = os.WriteFile(inputFilePath, content, 0644)
+		if err != nil {
+			return nil, fmt.Errorf("failed to write to input file: %v", err)
+		}
+	}
+
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(content))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse HTML: %v", err)
+	}
+
+	models := parseContent(doc)
+
+	outputData, err := json.MarshalIndent(models, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal JSON: %v", err)
+	}
+
+	err = os.WriteFile(outputFilePath, outputData, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to write to output file: %v", err)
+	}
+
+	return models, nil
+}
+
+func parseContent(doc *goquery.Document) []AvailableModel {
+	var models []AvailableModel
+	liElements := doc.Find("li")
+
+	liElements.Each(func(i int, li *goquery.Selection) {
+		if !li.HasClass("flex") || !li.HasClass("items-baseline") {
+			return
+		}
+
+		var model AvailableModel
+
+		nameElem := li.Find("h2")
+		if nameElem.Length() > 0 {
+			nameSpan := nameElem.Find("span")
+			if nameSpan.Length() > 0 {
+				model.Name = strings.TrimSpace(nameSpan.Text())
+			}
+		}
+
+		sizes := []string{}
+		sizeElements := li.Find("span")
+		sizeElements.Each(func(i int, span *goquery.Selection) {
+			if span.HasClass("inline-flex") && span.HasClass("items-center") && span.HasClass("rounded-md") && span.HasClass("bg-[#ddf4ff]") {
+				sizes = append(sizes, strings.TrimSpace(span.Text()))
+			}
+		})
+		if len(sizes) > 0 {
+			model.Sizes = sizes
+		}
+
+		models = append(models, model)
+	})
+
+	return models
+}
+
+func downloadModelCmd(modelName string) tea.Cmd {
+	return func() tea.Msg {
+		err := downloadModel(modelName)
+		if err != nil {
+			return errMsg(err)
+		}
+		return modelDownloadedMsg(modelName)
+	}
+}
+
+func downloadModel(modelName string) error {
+	cmd := exec.Command("ollama", "pull", modelName)
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("failed to download model '%s': %v", modelName, err)
+	}
+	return nil
 }
 
 func main() {

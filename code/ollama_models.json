@@ -1,0 +1,902 @@
+[
+  {
+    "name": "qwen2.5-coder",
+    "sizes": [
+      "0.5b",
+      "1.5b",
+      "3b",
+      "7b",
+      "14b",
+      "32b"
+    ]
+  },
+  {
+    "name": "llama3.2-vision",
+    "sizes": [
+      "11b",
+      "90b"
+    ]
+  },
+  {
+    "name": "llama3.2",
+    "sizes": [
+      "1b",
+      "3b"
+    ]
+  },
+  {
+    "name": "llama3.1",
+    "sizes": [
+      "8b",
+      "70b",
+      "405b"
+    ]
+  },
+  {
+    "name": "gemma2",
+    "sizes": [
+      "2b",
+      "9b",
+      "27b"
+    ]
+  },
+  {
+    "name": "qwen2.5",
+    "sizes": [
+      "0.5b",
+      "1.5b",
+      "3b",
+      "7b",
+      "14b",
+      "32b",
+      "72b"
+    ]
+  },
+  {
+    "name": "phi3.5",
+    "sizes": [
+      "3.8b"
+    ]
+  },
+  {
+    "name": "nemotron-mini",
+    "sizes": [
+      "4b"
+    ]
+  },
+  {
+    "name": "mistral-small",
+    "sizes": [
+      "22b"
+    ]
+  },
+  {
+    "name": "mistral-nemo",
+    "sizes": [
+      "12b"
+    ]
+  },
+  {
+    "name": "deepseek-coder-v2",
+    "sizes": [
+      "16b",
+      "236b"
+    ]
+  },
+  {
+    "name": "mistral",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "mixtral",
+    "sizes": [
+      "8x7b",
+      "8x22b"
+    ]
+  },
+  {
+    "name": "codegemma",
+    "sizes": [
+      "2b",
+      "7b"
+    ]
+  },
+  {
+    "name": "command-r",
+    "sizes": [
+      "35b"
+    ]
+  },
+  {
+    "name": "command-r-plus",
+    "sizes": [
+      "104b"
+    ]
+  },
+  {
+    "name": "llava",
+    "sizes": [
+      "7b",
+      "13b",
+      "34b"
+    ]
+  },
+  {
+    "name": "llama3",
+    "sizes": [
+      "8b",
+      "70b"
+    ]
+  },
+  {
+    "name": "gemma",
+    "sizes": [
+      "2b",
+      "7b"
+    ]
+  },
+  {
+    "name": "qwen",
+    "sizes": [
+      "0.5b",
+      "1.8b",
+      "4b",
+      "7b",
+      "14b",
+      "32b",
+      "72b",
+      "110b"
+    ]
+  },
+  {
+    "name": "qwen2",
+    "sizes": [
+      "0.5b",
+      "1.5b",
+      "7b",
+      "72b"
+    ]
+  },
+  {
+    "name": "phi3",
+    "sizes": [
+      "3.8b",
+      "14b"
+    ]
+  },
+  {
+    "name": "nomic-embed-text",
+    "sizes": null
+  },
+  {
+    "name": "llama2",
+    "sizes": [
+      "7b",
+      "13b",
+      "70b"
+    ]
+  },
+  {
+    "name": "codellama",
+    "sizes": [
+      "7b",
+      "13b",
+      "34b",
+      "70b"
+    ]
+  },
+  {
+    "name": "mxbai-embed-large",
+    "sizes": [
+      "335m"
+    ]
+  },
+  {
+    "name": "dolphin-mixtral",
+    "sizes": [
+      "8x7b",
+      "8x22b"
+    ]
+  },
+  {
+    "name": "starcoder2",
+    "sizes": [
+      "3b",
+      "7b",
+      "15b"
+    ]
+  },
+  {
+    "name": "phi",
+    "sizes": [
+      "2.7b"
+    ]
+  },
+  {
+    "name": "deepseek-coder",
+    "sizes": [
+      "1.3b",
+      "6.7b",
+      "33b"
+    ]
+  },
+  {
+    "name": "llama2-uncensored",
+    "sizes": [
+      "7b",
+      "70b"
+    ]
+  },
+  {
+    "name": "tinyllama",
+    "sizes": [
+      "1.1b"
+    ]
+  },
+  {
+    "name": "dolphin-mistral",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "yi",
+    "sizes": [
+      "6b",
+      "9b",
+      "34b"
+    ]
+  },
+  {
+    "name": "dolphin-llama3",
+    "sizes": [
+      "8b",
+      "70b"
+    ]
+  },
+  {
+    "name": "orca-mini",
+    "sizes": [
+      "3b",
+      "7b",
+      "13b",
+      "70b"
+    ]
+  },
+  {
+    "name": "zephyr",
+    "sizes": [
+      "7b",
+      "141b"
+    ]
+  },
+  {
+    "name": "llava-llama3",
+    "sizes": [
+      "8b"
+    ]
+  },
+  {
+    "name": "snowflake-arctic-embed",
+    "sizes": [
+      "22m",
+      "33m",
+      "110m",
+      "137m",
+      "335m"
+    ]
+  },
+  {
+    "name": "starcoder",
+    "sizes": [
+      "1b",
+      "3b",
+      "7b",
+      "15b"
+    ]
+  },
+  {
+    "name": "codestral",
+    "sizes": [
+      "22b"
+    ]
+  },
+  {
+    "name": "mistral-openorca",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "wizardlm2",
+    "sizes": [
+      "7b",
+      "8x22b"
+    ]
+  },
+  {
+    "name": "vicuna",
+    "sizes": [
+      "7b",
+      "13b",
+      "33b"
+    ]
+  },
+  {
+    "name": "granite-code",
+    "sizes": [
+      "3b",
+      "8b",
+      "20b",
+      "34b"
+    ]
+  },
+  {
+    "name": "wizard-vicuna-uncensored",
+    "sizes": [
+      "7b",
+      "13b",
+      "30b"
+    ]
+  },
+  {
+    "name": "llama2-chinese",
+    "sizes": [
+      "7b",
+      "13b"
+    ]
+  },
+  {
+    "name": "codegeex4",
+    "sizes": [
+      "9b"
+    ]
+  },
+  {
+    "name": "all-minilm",
+    "sizes": [
+      "22m",
+      "33m"
+    ]
+  },
+  {
+    "name": "openchat",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "nous-hermes2",
+    "sizes": [
+      "10.7b",
+      "34b"
+    ]
+  },
+  {
+    "name": "aya",
+    "sizes": [
+      "8b",
+      "35b"
+    ]
+  },
+  {
+    "name": "codeqwen",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "wizardcoder",
+    "sizes": [
+      "33b"
+    ]
+  },
+  {
+    "name": "tinydolphin",
+    "sizes": [
+      "1.1b"
+    ]
+  },
+  {
+    "name": "stable-code",
+    "sizes": [
+      "3b"
+    ]
+  },
+  {
+    "name": "openhermes",
+    "sizes": null
+  },
+  {
+    "name": "qwen2-math",
+    "sizes": [
+      "1.5b",
+      "7b",
+      "72b"
+    ]
+  },
+  {
+    "name": "mistral-large",
+    "sizes": [
+      "123b"
+    ]
+  },
+  {
+    "name": "stablelm2",
+    "sizes": [
+      "1.6b",
+      "12b"
+    ]
+  },
+  {
+    "name": "bakllava",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "reflection",
+    "sizes": [
+      "70b"
+    ]
+  },
+  {
+    "name": "glm4",
+    "sizes": [
+      "9b"
+    ]
+  },
+  {
+    "name": "deepseek-llm",
+    "sizes": [
+      "7b",
+      "67b"
+    ]
+  },
+  {
+    "name": "llama3-gradient",
+    "sizes": [
+      "8b",
+      "70b"
+    ]
+  },
+  {
+    "name": "wizard-math",
+    "sizes": [
+      "7b",
+      "13b",
+      "70b"
+    ]
+  },
+  {
+    "name": "neural-chat",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "smollm",
+    "sizes": [
+      "135m",
+      "360m",
+      "1.7b"
+    ]
+  },
+  {
+    "name": "moondream",
+    "sizes": [
+      "1.8b"
+    ]
+  },
+  {
+    "name": "xwinlm",
+    "sizes": [
+      "7b",
+      "13b"
+    ]
+  },
+  {
+    "name": "llama3-chatqa",
+    "sizes": [
+      "8b",
+      "70b"
+    ]
+  },
+  {
+    "name": "sqlcoder",
+    "sizes": [
+      "7b",
+      "15b"
+    ]
+  },
+  {
+    "name": "nous-hermes",
+    "sizes": [
+      "7b",
+      "13b"
+    ]
+  },
+  {
+    "name": "phind-codellama",
+    "sizes": [
+      "34b"
+    ]
+  },
+  {
+    "name": "yarn-llama2",
+    "sizes": [
+      "7b",
+      "13b"
+    ]
+  },
+  {
+    "name": "dolphincoder",
+    "sizes": [
+      "7b",
+      "15b"
+    ]
+  },
+  {
+    "name": "wizardlm",
+    "sizes": null
+  },
+  {
+    "name": "deepseek-v2",
+    "sizes": [
+      "16b",
+      "236b"
+    ]
+  },
+  {
+    "name": "starling-lm",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "samantha-mistral",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "solar",
+    "sizes": [
+      "10.7b"
+    ]
+  },
+  {
+    "name": "falcon",
+    "sizes": [
+      "7b",
+      "40b",
+      "180b"
+    ]
+  },
+  {
+    "name": "yi-coder",
+    "sizes": [
+      "1.5b",
+      "9b"
+    ]
+  },
+  {
+    "name": "orca2",
+    "sizes": [
+      "7b",
+      "13b"
+    ]
+  },
+  {
+    "name": "internlm2",
+    "sizes": [
+      "1m",
+      "1.8b",
+      "7b",
+      "20b"
+    ]
+  },
+  {
+    "name": "hermes3",
+    "sizes": [
+      "8b",
+      "70b",
+      "405b"
+    ]
+  },
+  {
+    "name": "stable-beluga",
+    "sizes": [
+      "7b",
+      "13b",
+      "70b"
+    ]
+  },
+  {
+    "name": "llava-phi3",
+    "sizes": [
+      "3.8b"
+    ]
+  },
+  {
+    "name": "dolphin-phi",
+    "sizes": [
+      "2.7b"
+    ]
+  },
+  {
+    "name": "wizardlm-uncensored",
+    "sizes": [
+      "13b"
+    ]
+  },
+  {
+    "name": "yarn-mistral",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "llama-pro",
+    "sizes": null
+  },
+  {
+    "name": "medllama2",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "meditron",
+    "sizes": [
+      "7b",
+      "70b"
+    ]
+  },
+  {
+    "name": "minicpm-v",
+    "sizes": [
+      "8b"
+    ]
+  },
+  {
+    "name": "nexusraven",
+    "sizes": [
+      "13b"
+    ]
+  },
+  {
+    "name": "llama3-groq-tool-use",
+    "sizes": [
+      "8b",
+      "70b"
+    ]
+  },
+  {
+    "name": "nous-hermes2-mixtral",
+    "sizes": [
+      "8x7b"
+    ]
+  },
+  {
+    "name": "codeup",
+    "sizes": [
+      "13b"
+    ]
+  },
+  {
+    "name": "everythinglm",
+    "sizes": [
+      "13b"
+    ]
+  },
+  {
+    "name": "nemotron",
+    "sizes": [
+      "70b"
+    ]
+  },
+  {
+    "name": "bge-m3",
+    "sizes": [
+      "567m"
+    ]
+  },
+  {
+    "name": "magicoder",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "stablelm-zephyr",
+    "sizes": [
+      "3b"
+    ]
+  },
+  {
+    "name": "codebooga",
+    "sizes": [
+      "34b"
+    ]
+  },
+  {
+    "name": "wizard-vicuna",
+    "sizes": [
+      "13b"
+    ]
+  },
+  {
+    "name": "falcon2",
+    "sizes": [
+      "11b"
+    ]
+  },
+  {
+    "name": "mistrallite",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "duckdb-nsql",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "megadolphin",
+    "sizes": [
+      "120b"
+    ]
+  },
+  {
+    "name": "notux",
+    "sizes": [
+      "8x7b"
+    ]
+  },
+  {
+    "name": "open-orca-platypus2",
+    "sizes": [
+      "13b"
+    ]
+  },
+  {
+    "name": "notus",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "goliath",
+    "sizes": null
+  },
+  {
+    "name": "mathstral",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "solar-pro",
+    "sizes": [
+      "22b"
+    ]
+  },
+  {
+    "name": "granite3-dense",
+    "sizes": [
+      "2b",
+      "8b"
+    ]
+  },
+  {
+    "name": "reader-lm",
+    "sizes": [
+      "0.5b",
+      "1.5b"
+    ]
+  },
+  {
+    "name": "nuextract",
+    "sizes": [
+      "3.8b"
+    ]
+  },
+  {
+    "name": "dbrx",
+    "sizes": [
+      "132b"
+    ]
+  },
+  {
+    "name": "firefunction-v2",
+    "sizes": [
+      "70b"
+    ]
+  },
+  {
+    "name": "alfred",
+    "sizes": [
+      "40b"
+    ]
+  },
+  {
+    "name": "granite3-moe",
+    "sizes": [
+      "1b",
+      "3b"
+    ]
+  },
+  {
+    "name": "bge-large",
+    "sizes": [
+      "335m"
+    ]
+  },
+  {
+    "name": "smollm2",
+    "sizes": [
+      "135m",
+      "360m",
+      "1.7b"
+    ]
+  },
+  {
+    "name": "aya-expanse",
+    "sizes": [
+      "8b",
+      "32b"
+    ]
+  },
+  {
+    "name": "bespoke-minicheck",
+    "sizes": [
+      "7b"
+    ]
+  },
+  {
+    "name": "shieldgemma",
+    "sizes": [
+      "2b",
+      "9b",
+      "27b"
+    ]
+  },
+  {
+    "name": "deepseek-v2.5",
+    "sizes": [
+      "236b"
+    ]
+  },
+  {
+    "name": "llama-guard3",
+    "sizes": [
+      "1b",
+      "8b"
+    ]
+  },
+  {
+    "name": "paraphrase-multilingual",
+    "sizes": [
+      "278m"
+    ]
+  },
+  {
+    "name": "opencoder",
+    "sizes": [
+      "1.5b",
+      "8b"
+    ]
+  },
+  {
+    "name": "granite3-guardian",
+    "sizes": [
+      "2b",
+      "8b"
+    ]
+  }
+]
