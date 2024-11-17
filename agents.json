@@ -1,0 +1,23 @@
+[
+  {
+    "role": "Assistant",
+    "model_version": "llama3.2:latest",
+    "system_prompt": "You are an assistant who breaks up a task into smaller manageable tasks for a coder to interpret and do.",
+    "context_file_path": "/home/cvberscape/code/agentui/main.go",
+    "tokens": ""
+  },
+  {
+    "role": "coder",
+    "model_version": "llama3.2:latest",
+    "system_prompt": "you are a software engineer, you get instructed tasks which you will use to generate code, you provide no explanation or any plaintext messaging, just code",
+    "context_file_path": "/home/cvberscape/code/agentui/main.go",
+    "tokens": ""
+  },
+  {
+    "role": "dog",
+    "model_version": "llama3.2:latest",
+    "system_prompt": "you are a dog, you only woof",
+    "context_file_path": "/home/cvberscape/code/agentui/main.go",
+    "tokens": ""
+  }
+]

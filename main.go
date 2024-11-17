@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -78,6 +79,7 @@ const (
 	agentFormTitle          = "Agent Configuration"
 	confirmDeleteAgentTitle = "Confirm Agent Deletion"
 	confirmDeleteModelTitle = "Confirm Model Deletion"
+	agentsFilePath          = "./agents.json" // Path to the agents JSON file
 )
 
 var (
@@ -106,7 +108,6 @@ func (m *model) indicatorStyle() lipgloss.Style {
 type model struct {
 	userMessages           []string
 	assistantResponses     []string
-	testerResponses        []string
 	conversationHistory    []map[string]string
 	currentUserMessage     string
 	err                    error
@@ -158,6 +159,41 @@ func loadFileContext(filePath string) (string, error) {
 		return "", fmt.Errorf("failed to read file %s: %w", filePath, err)
 	}
 	return string(content), nil
+}
+
+func saveAgents(m *model) error {
+	data, err := json.MarshalIndent(m.agents, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal agents: %w", err)
+	}
+
+	err = ioutil.WriteFile(agentsFilePath, data, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write agents to file: %w", err)
+	}
+
+	return nil
+}
+
+func loadAgents(m *model) error {
+	if _, err := os.Stat(agentsFilePath); os.IsNotExist(err) {
+		return nil
+	}
+
+	data, err := ioutil.ReadFile(agentsFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to read agents file: %w", err)
+	}
+
+	var loadedAgents []Agent
+	err = json.Unmarshal(data, &loadedAgents)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal agents: %w", err)
+	}
+
+	m.agents = loadedAgents
+
+	return nil
 }
 
 // TODO REMOVE
@@ -316,7 +352,6 @@ func InitialModel() *model {
 	m := &model{
 		userMessages:        make([]string, 0),
 		assistantResponses:  make([]string, 0),
-		testerResponses:     make([]string, 0),
 		conversationHistory: []map[string]string{},
 		currentUserMessage:  "",
 		textarea:            ta,
@@ -346,19 +381,28 @@ func InitialModel() *model {
 		confirmDeleteType:      "",
 	}
 
-	m.agents = append(m.agents, Agent{
-		Role:            "Assistant",
-		ModelVersion:    "llama3.1",
-		SystemPrompt:    "You are an assistant tasked with generating code based on the user's prompt.",
-		ContextFilePath: "/path/to/context/file",
-		Tokens:          "16384",
-	}, Agent{
-		Role:            "Tester",
-		ModelVersion:    "llama3.1",
-		SystemPrompt:    "You are a code tester tasked with reviewing the following code for potential bugs or issues.",
-		ContextFilePath: "/path/to/context/file",
-		Tokens:          "16384",
-	})
+	err := loadAgents(m)
+	if err != nil {
+		log.Printf("Error loading agents from file: %v", err)
+		m.agents = append(m.agents, Agent{
+			Role:            "Assistant",
+			ModelVersion:    "llama3.1",
+			SystemPrompt:    "You are an assistant tasked with generating code based on the user's prompt.",
+			ContextFilePath: "/path/to/context/file",
+			Tokens:          "16384",
+		}, Agent{
+			Role:            "Tester",
+			ModelVersion:    "llama3.1",
+			SystemPrompt:    "You are a code tester tasked with reviewing the following code for potential bugs or issues.",
+			ContextFilePath: "/path/to/context/file",
+			Tokens:          "16384",
+		})
+
+		err = saveAgents(m)
+		if err != nil {
+			log.Printf("Failed to save default agents: %v", err)
+		}
+	}
 
 	m.populateAgentsTable()
 
@@ -388,8 +432,6 @@ func (m *model) populateAgentsTable() {
 	if m.viewMode == AgentView && m.agentsTable.Focused() && len(rows) > 0 {
 		m.agentsTable.SetCursor(0)
 	}
-
-	m.agentsTable.SetCursor(0)
 }
 
 func (m *model) Init() tea.Cmd {
@@ -468,6 +510,70 @@ func (m *model) navigate(direction string) {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
+	if m.errorMessage != "" {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "esc", "q":
+				m.errorMessage = ""
+				return m, nil
+			case "r":
+				// Implement retry logic if applicable
+				// For example, you might want to retry fetching models
+				m.errorMessage = ""
+				return m, fetchModelsCmd()
+			}
+		default:
+			return m, nil
+		}
+	}
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if keyIsCtrlZ(msg) {
+			return m, tea.Quit
+		}
+
+		if msg.String() == "esc" {
+			if m.formActive {
+				m.formActive = false
+				m.viewMode = ChatView
+				m.textarea.Focus()
+				return m, nil
+			}
+			if m.agentFormActive {
+				m.agentFormActive = false
+				m.viewMode = AgentView
+				m.agentsTable.Focus()
+				return m, nil
+			}
+			if m.confirmForm != nil {
+				m.viewMode = (func() viewMode {
+					if m.confirmDeleteType == "model" {
+						return ModelView
+					}
+					return AgentView
+				})()
+				m.confirmDeleteModelName = ""
+				m.agentToDelete = ""
+				m.confirmDeleteType = ""
+				m.confirmForm = nil
+				switch m.viewMode {
+				case ModelView:
+					m.modelTable.Focus()
+				case AgentView:
+					m.agentsTable.Focus()
+				}
+				return m, nil
+			}
+			m.viewMode = ChatView
+			m.formActive = false
+			m.agentFormActive = false
+			m.textarea.Focus()
+			return m, nil
+		}
+	}
+
 	if m.formActive {
 		updatedForm, formCmd := m.configForm.Update(msg)
 		m.configForm = updatedForm.(*huh.Form)
@@ -517,6 +623,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewMode = AgentView
 			m.populateAgentsTable()
 			m.agentsTable.Focus()
+
+			err := saveAgents(m)
+			if err != nil {
+				m.errorMessage = fmt.Sprintf("Failed to save agents: %v", err)
+				return m, nil
+			}
+
 			return m, nil
 		}
 
@@ -681,6 +794,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.modelTable.Blur()
 				return m, nil
 			}
+
+		case "u":
+			if m.viewMode == AgentView {
+				m.moveAgentUp()
+				return m, saveAgentsCmd(m)
+			}
+
+		case "y":
+			if m.viewMode == AgentView {
+				m.moveAgentDown()
+				return m, saveAgentsCmd(m)
+			}
+
 		case "esc":
 			switch m.viewMode {
 			case AgentFormView:
@@ -713,6 +839,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textarea.Focus()
 				return m, nil
 			}
+
 		case "enter":
 			return m.handleEnterKey()
 		case "j", "down":
@@ -767,6 +894,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.agentToDelete = ""
 		m.populateAgentsTable()
 		m.agentsTable.Focus()
+
+		err := saveAgents(m)
+		if err != nil {
+			m.errorMessage = fmt.Sprintf("Failed to save agents: %v", err)
+			return m, nil
+		}
+
 		return m, nil
 
 	case errMsg:
@@ -807,11 +941,96 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case OllamaToggledMsg:
 		m.ollamaRunning = !m.ollamaRunning
 		m.updateTextareaIndicatorColor()
-		log.Printf("Ollama Serve toggled. Now running: %v", m.ollamaRunning)
 		return m, nil
 	}
 
 	return m, cmd
+}
+
+func processAgentChain(input string, m *model, agent Agent) (string, error) {
+	contextContent, err := loadFileContext(agent.ContextFilePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to load context for agent '%s': %w", agent.Role, err)
+	}
+
+	systemPrompt := strings.ReplaceAll(agent.SystemPrompt, "{context}", contextContent)
+
+	messagesForAgent := []map[string]string{
+		{
+			"role":    "system",
+			"content": systemPrompt,
+		},
+		{
+			"role":    "user",
+			"content": input,
+		},
+	}
+
+	response, err := requestOllama(messagesForAgent, agent)
+	if err != nil {
+		log.Printf("Error from agent '%s': %v\n", agent.Role, err)
+		return "", err
+	}
+
+	return response, nil
+}
+
+func (m *model) moveAgentUp() {
+	cursor := m.agentsTable.Cursor()
+	log.Printf("Attempting to move agent up. Cursor: %d, Agents Length: %d", cursor, len(m.agents))
+
+	if cursor <= 0 || cursor > len(m.agents) {
+		log.Println("Invalid cursor position for moving up.")
+		return
+	}
+
+	agentIndex := cursor - 1
+	log.Printf("Agent Index for moving up: %d", agentIndex)
+
+	if agentIndex > 0 {
+		m.agents[agentIndex], m.agents[agentIndex-1] = m.agents[agentIndex-1], m.agents[agentIndex]
+
+		m.populateAgentsTable()
+
+		m.agentsTable.SetCursor(cursor - 1)
+		log.Printf("Moved agent up. New cursor position: %d", cursor-1)
+
+		return
+	}
+}
+
+func (m *model) moveAgentDown() {
+	cursor := m.agentsTable.Cursor()
+	log.Printf("Attempting to move agent down. Cursor: %d, Agents Length: %d", cursor, len(m.agents))
+
+	if cursor <= 0 || cursor > len(m.agents) {
+		log.Println("Invalid cursor position for moving down.")
+		return
+	}
+
+	agentIndex := cursor - 1
+	log.Printf("Agent Index for moving down: %d", agentIndex)
+
+	if agentIndex < len(m.agents)-1 {
+		m.agents[agentIndex], m.agents[agentIndex+1] = m.agents[agentIndex+1], m.agents[agentIndex]
+
+		m.populateAgentsTable()
+
+		m.agentsTable.SetCursor(cursor + 1)
+		log.Printf("Moved agent down. New cursor position: %d", cursor+1)
+
+		return
+	}
+}
+
+func saveAgentsCmd(m *model) tea.Cmd {
+	return func() tea.Msg {
+		err := saveAgents(m)
+		if err != nil {
+			return errMsg(fmt.Errorf("failed to save agents: %w", err))
+		}
+		return notifyMsg("Agents reordered and saved successfully.")
+	}
 }
 
 func (m *model) handleEnterKey() (tea.Model, tea.Cmd) {
@@ -971,7 +1190,10 @@ func (m model) ViewWithoutError() string {
 }
 
 func (m model) agentView() string {
-	return "Agents:\n\n" + m.agentsTable.View() + "\n\nPress 'a' to Add, 'e' to Edit, 'd' to Delete an agent, 'g' to Go Back."
+	return fmt.Sprintf(
+		"Agents (Press 'u' to move up, 'y' to move down):\n\n%s\n\nPress 'a' to Add, 'e' to Edit, 'd' to Delete an agent, 'g' to Go Back.",
+		m.agentsTable.View(),
+	)
 }
 
 func (m model) agentFormView() string {
@@ -1083,6 +1305,7 @@ func deleteAgentCmd(agentRole string) tea.Cmd {
 func sendChatMessage(m *model) tea.Cmd {
 	return func() tea.Msg {
 		if m.currentUserMessage == "" {
+			log.Println("No user message to send.")
 			return nil
 		}
 
@@ -1091,11 +1314,13 @@ func sendChatMessage(m *model) tea.Cmd {
 			"content": m.currentUserMessage,
 		})
 
-		for _, agent := range m.agents {
-			response, err := processAgent(messagesForAgent(m, agent), m, agent)
-			if err != nil {
-				return errMsg(err)
-			}
+		responses, err := processAgentsSequentially(m, m.currentUserMessage, m.agents)
+		if err != nil {
+			return errMsg(err)
+		}
+
+		for i, response := range responses {
+			agent := m.agents[i]
 			m.conversationHistory = append(m.conversationHistory, map[string]string{
 				"role":    agent.Role,
 				"content": response,
@@ -1105,21 +1330,107 @@ func sendChatMessage(m *model) tea.Cmd {
 
 		m.userMessages = append(m.userMessages, m.currentUserMessage)
 		m.currentUserMessage = ""
+		m.loading = false
+		m.viewMode = ChatView
+		m.textarea.Blur()
 		m.updateViewport()
 
 		return responseMsg("Conversation processed with configured agents.")
 	}
 }
 
+func processAgentsSequentially(m *model, input string, agents []Agent) ([]string, error) {
+	var responses []string
+	currentInput := input
+
+	for _, agent := range agents {
+		response, err := processAgentChain(currentInput, m, agent)
+		if err != nil {
+			log.Printf("Error processing agent '%s': %v\n", agent.Role, err)
+			return responses, err
+		}
+		responses = append(responses, response)
+		currentInput = response
+	}
+
+	return responses, nil
+}
+
 func processAgent(messages []map[string]string, m *model, agent Agent) (string, error) {
-	switch strings.ToLower(agent.Role) {
+	role := strings.ToLower(agent.Role)
+
+	switch role {
 	case "assistant":
 		return generateCode(messages, m, agent)
 	case "tester":
 		return testCode(messages, m, agent)
 	default:
-		return fmt.Sprintf("Agent with role '%s' has no defined behavior.", agent.Role), nil
+		return dynamicAgentBehavior(messages, m, agent)
 	}
+}
+
+func dynamicAgentBehavior(messages []map[string]string, m *model, agent Agent) (string, error) {
+	contextContent, err := loadFileContext(agent.ContextFilePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to load context for agent '%s': %w", agent.Role, err)
+	}
+
+	systemPrompt := strings.ReplaceAll(agent.SystemPrompt, "{context}", contextContent)
+
+	systemMessage := map[string]string{
+		"role":    "system",
+		"content": systemPrompt,
+	}
+	messagesWithSystem := append([]map[string]string{systemMessage}, messages...)
+
+	numCtx, err := strconv.Atoi(agent.Tokens)
+	if err != nil || numCtx <= 0 {
+		numCtx = 16384
+	}
+
+	options := map[string]interface{}{
+		"num_ctx": numCtx,
+	}
+
+	requestBody, err := json.Marshal(map[string]interface{}{
+		"model":    agent.ModelVersion,
+		"messages": messagesWithSystem,
+		"stream":   false,
+		"options":  options,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request body for agent '%s': %w", agent.Role, err)
+	}
+
+	req, err := http.NewRequest("POST", ollamaAPIURL+"/chat", bytes.NewBuffer(requestBody))
+	if err != nil {
+		return "", fmt.Errorf("failed to create HTTP request for agent '%s': %w", agent.Role, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request failed for agent '%s': %w", agent.Role, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("error from Ollama API for agent '%s': %v", agent.Role, resp.Status)
+	}
+
+	var rawResponse map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&rawResponse); err != nil {
+		return "", fmt.Errorf("failed to decode response for agent '%s': %w", agent.Role, err)
+	}
+
+	if message, ok := rawResponse["message"].(map[string]interface{}); ok {
+		if content, ok := message["content"].(string); ok {
+			return content, nil
+		}
+	}
+
+	return "", fmt.Errorf("unexpected response format or empty response for agent '%s': %+v", agent.Role, rawResponse)
 }
 
 func messagesForAgent(m *model, agent Agent) []map[string]string {
@@ -1253,39 +1564,50 @@ func generateCode(messages []map[string]string, m *model, agent Agent) (string, 
 	}
 	messagesWithSystem := append([]map[string]string{systemMessage}, messages...)
 
-	return requestOllama(messagesWithSystem, agent)
+	response, err := requestOllama(messagesWithSystem, agent)
+	if err != nil {
+		return "", err
+	}
+
+	if strings.Contains(response, "func ") || strings.Contains(response, "package ") {
+		formattedResponse := fmt.Sprintf("```go\n%s\n```", response)
+		return formattedResponse, nil
+	}
+
+	return response, nil
 }
 
 func testCode(messages []map[string]string, m *model, agent Agent) (string, error) {
 	assistantCode := ""
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i]["role"] == "assistant" {
+		if strings.ToLower(messages[i]["role"]) == "assistant" {
 			assistantCode = messages[i]["content"]
 			break
 		}
 	}
 
 	if assistantCode == "" {
-		return "No code for agent to test", nil
+		return "No code for agent to test.", nil
 	}
 
 	codeBlocks := extractCodeBlocks(assistantCode)
 	if len(codeBlocks) == 0 {
-		return "No code for agent to test", nil
+		return "No code for agent to test.", nil
 	}
 
 	codeToTest := strings.Join(codeBlocks, "\n")
 
 	systemPrompt := "You are a code tester tasked with reviewing the following code for potential bugs or issues. Identify and highlight any issues or improvements needed."
 
-	systemMessage := map[string]string{
-		"role":    "system",
-		"content": systemPrompt,
-	}
-
 	messagesForTester := []map[string]string{
-		systemMessage,
-		{"role": "user", "content": codeToTest},
+		{
+			"role":    "system",
+			"content": systemPrompt,
+		},
+		{
+			"role":    "user",
+			"content": codeToTest,
+		},
 	}
 
 	return requestOllama(messagesForTester, agent)
