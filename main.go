@@ -74,10 +74,12 @@ type Agent struct {
 	Role            string   `json:"role"`
 	ModelVersion    string   `json:"model_version"`
 	SystemPrompt    string   `json:"system_prompt"`
+	UseContext      bool     `json:"use_context"`
 	ContextFilePath string   `json:"context_file_path"`
+	UseConversation bool     `json:"use_conversation"`
 	Tokens          string   `json:"tokens"`
-	Tools           []Tool   `json:"tools,omitempty"`          // Existing field for tools
-	SelectedTools   []string `json:"selected_tools,omitempty"` // New field for form selections
+	Tools           []Tool   `json:"tools,omitempty"`
+	SelectedTools   []string `json:"selected_tools,omitempty"`
 }
 
 var checkGoCodeTool = Tool{
@@ -271,7 +273,6 @@ func createConfigForm(config *ChatConfig, modelVersions []string) *huh.Form {
 }
 
 func createAgentForm(agent *Agent, modelVersions []string, availableTools []Tool) *huh.Form {
-	// Initialize SelectedTools to an empty slice if it's nil
 	if agent.SelectedTools == nil {
 		agent.SelectedTools = []string{}
 	}
@@ -302,10 +303,48 @@ func createAgentForm(agent *Agent, modelVersions []string, availableTools []Tool
 				Title("System Prompt").
 				Value(&agent.SystemPrompt),
 
+			huh.NewSelect[bool]().
+				Title("Use Context File").
+				Options(
+					huh.NewOption("Yes", true),
+					huh.NewOption("No", false),
+				).
+				Value(&agent.UseContext),
+
 			huh.NewInput().
-				Title("Context File Path").
-				Placeholder("/path/to/context/file").
-				Value(&agent.ContextFilePath),
+				Value(&agent.ContextFilePath).
+				TitleFunc(func() string {
+					if agent.UseContext {
+						return "Context File Path"
+					}
+					return "Context Status"
+				}, &agent.UseContext).
+				PlaceholderFunc(func() string {
+					if agent.UseContext {
+						return "/path/to/your/context/file"
+					}
+					return "No context file selected"
+				}, &agent.UseContext).
+				Validate(func(s string) error {
+					if !agent.UseContext {
+						return nil
+					}
+					if s == "" {
+						return fmt.Errorf("context file path is required when context is enabled")
+					}
+					if _, err := os.Stat(s); err != nil {
+						return fmt.Errorf("file not found: %s", s)
+					}
+					return nil
+				}),
+
+			huh.NewSelect[bool]().
+				Title("Use Conversation History").
+				Options(
+					huh.NewOption("Yes", true),
+					huh.NewOption("No", false),
+				).
+				Value(&agent.UseConversation),
 
 			huh.NewInput().
 				Title("Tokens").
@@ -315,9 +354,10 @@ func createAgentForm(agent *Agent, modelVersions []string, availableTools []Tool
 			huh.NewMultiSelect[string]().
 				Title("Tools").
 				Options(toolOptions...).
-				Value(&agent.SelectedTools), // Use SelectedTools here
+				Value(&agent.SelectedTools),
 		),
 	).WithShowHelp(true)
+
 	return form
 }
 
@@ -456,13 +496,17 @@ func InitialModel() *model {
 			Role:            "Assistant",
 			ModelVersion:    "llama3.1",
 			SystemPrompt:    "You are an assistant tasked with generating code based on the user's prompt.",
-			ContextFilePath: "/path/to/context/file",
+			UseContext:      false,
+			ContextFilePath: "",
+			UseConversation: false, // Default to not using conversation history
 			Tokens:          "16384",
 		}, Agent{
 			Role:            "Tester",
 			ModelVersion:    "llama3.1",
 			SystemPrompt:    "You are a code tester tasked with reviewing the following code for potential bugs or issues.",
-			ContextFilePath: "/path/to/context/file",
+			UseContext:      false,
+			ContextFilePath: "",
+			UseConversation: true, // Example of enabling conversation history by default
 			Tokens:          "16384",
 		})
 
@@ -1062,9 +1106,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func processAgentChain(input string, m *model, agent Agent) (string, error) {
-	contextContent, err := loadFileContext(agent.ContextFilePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to load context for agent '%s': %w", agent.Role, err)
+	var contextContent string
+	var err error
+
+	if agent.ContextFilePath != "" && agent.ContextFilePath != "No context file selected" {
+		contextContent, err = loadFileContext(agent.ContextFilePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to load context for agent '%s': %w", agent.Role, err)
+		}
 	}
 
 	hasCodeChecker := false
@@ -1078,66 +1127,65 @@ func processAgentChain(input string, m *model, agent Agent) (string, error) {
 	codeBlocks := extractCodeBlocks(input)
 	hasCode := len(codeBlocks) > 0
 
-	// Enhanced system prompt with more specific instructions
+	// Create system prompt based on agent type and context availability
 	var systemPrompt string
 	if hasCodeChecker && hasCode {
-		systemPrompt = fmt.Sprintf(`%s
+		basePrompt := `You are a code review assistant with access to a code checking tool. Follow these steps:
 
-As a code review assistant, you have access to a Go code checking tool. Follow these steps for each piece of code you receive:
+1. First, analyze any code you receive:
+   - Explain what the code does
+   - Comment on the code structure
+   - Note any potential issues
+   - Suggest possible improvements
 
-1. First, analyze the code yourself and provide your initial thoughts on:
-   - Code structure and organization
-   - Potential issues or improvements
-   - Best practices adherence
+2. Then, use the check_go_code tool to verify the code. When using the tool:
+   - Pass the EXACT code you received, do not modify it
+   - Wait for the tool's results
+   - Analyze any issues found
 
-2. Use the check_go_code tool to verify the code's quality
-
-3. After receiving the tool's output:
-   - Analyze the lint results
-   - Explain any issues found
-   - Suggest specific improvements
-   - If necessary, provide corrected code
-
-4. Provide a comprehensive response that includes:
-   - Your initial analysis
-   - Interpretation of lint results
+3. Finally, provide:
+   - Your combined analysis
    - Specific recommendations
-   - Corrected code (if needed)
+   - Corrected code if needed
 
-Remember to explain your reasoning and provide context for your suggestions.
+Important: When using check_go_code, pass the exact code as received. Do not create new or different code for the tool check.`
 
-Context: %s`, agent.SystemPrompt, contextContent)
+		if contextContent != "" {
+			systemPrompt = fmt.Sprintf("%s\n\nContext: %s", basePrompt, contextContent)
+		} else {
+			systemPrompt = basePrompt
+		}
 	} else {
-		systemPrompt = strings.ReplaceAll(agent.SystemPrompt, "{context}", contextContent)
+		if contextContent != "" {
+			systemPrompt = strings.ReplaceAll(agent.SystemPrompt, "{context}", contextContent)
+		} else {
+			systemPrompt = strings.ReplaceAll(agent.SystemPrompt, "{context}", "")
+		}
 	}
 
-	// Create initial messages for the agent
+	// Prepare messages for the agent
 	var messages []map[string]string
+
+	// Always start with the system prompt
 	messages = append(messages, map[string]string{
 		"role":    "system",
 		"content": systemPrompt,
 	})
 
-	// If this is a code review agent, format the input to explicitly request analysis
-	if hasCodeChecker && hasCode {
-		messages = append(messages, map[string]string{
-			"role": "user",
-			"content": fmt.Sprintf(`Please review this Go code and provide a detailed analysis:
-
-%s
-
-First provide your initial analysis, then use the code checking tool to verify the code, and finally provide your recommendations based on both your analysis and the tool's output.`, input),
-		})
-	} else {
-		messages = append(messages, map[string]string{
-			"role":    "user",
-			"content": input,
-		})
+	// Add conversation history if enabled
+	if agent.UseConversation {
+		messages = append(messages, m.conversationHistory...)
 	}
+
+	// Add the current input
+	messages = append(messages, map[string]string{
+		"role":    "user",
+		"content": input,
+	})
 
 	// Prepare tools if agent has them
 	var tools []map[string]interface{}
-	if hasCodeChecker {
+	if hasCodeChecker && hasCode {
 		tools = []map[string]interface{}{
 			{
 				"type": "function",
@@ -1206,10 +1254,13 @@ First provide your initial analysis, then use the code checking tool to verify t
 	var fullResponse strings.Builder
 	fullResponse.WriteString(fmt.Sprintf("Response from %s:\n\n", agent.Role))
 
-	// First, add the agent's initial analysis
-	fullResponse.WriteString(apiResponse.Message.Content)
+	// Add initial analysis
+	if !strings.Contains(apiResponse.Message.Content, `{"name": "check_go_code"`) {
+		fullResponse.WriteString("Initial Analysis:\n")
+		fullResponse.WriteString(apiResponse.Message.Content)
+	}
 
-	// Then process any tool calls and add their results
+	// Process tool calls if any
 	if len(apiResponse.Message.ToolCalls) > 0 {
 		for _, toolCall := range apiResponse.Message.ToolCalls {
 			if toolCall.Function.Name == "check_go_code" {
@@ -1238,11 +1289,11 @@ First provide your initial analysis, then use the code checking tool to verify t
 						},
 						map[string]string{
 							"role":    "user",
-							"content": fmt.Sprintf("The code checking tool found some issues. Please analyze these results and provide specific recommendations:\n\n%s", lintResult),
+							"content": fmt.Sprintf("The code checking tool found some issues:\n\n%s\n\nPlease analyze these results and provide specific recommendations.", lintResult),
 						},
 					)
 
-					// Make a second API call to get the agent's analysis of the lint results
+					// Make a second API call for analysis of the lint results
 					analysisPayload := map[string]interface{}{
 						"model":    agent.ModelVersion,
 						"messages": analysisMessages,
@@ -1270,10 +1321,12 @@ First provide your initial analysis, then use the code checking tool to verify t
 						return "", fmt.Errorf("failed to decode analysis response: %w", err)
 					}
 
-					fullResponse.WriteString("\n\nTool Analysis:\n")
+					fullResponse.WriteString("\n\nLint Results and Analysis:\n")
+					fullResponse.WriteString(lintResult)
+					fullResponse.WriteString("\n\nRecommendations:\n")
 					fullResponse.WriteString(analysisResponse.Message.Content)
 				} else {
-					fullResponse.WriteString("\n\nCode check passed successfully:\n")
+					fullResponse.WriteString("\n\nCode Check Results:\n")
 					fullResponse.WriteString(lintResult)
 				}
 			}

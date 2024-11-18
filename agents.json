@@ -2,16 +2,20 @@
   {
     "role": "coder",
     "model_version": "llama3.2:latest",
-    "system_prompt": "you are a software engineer, you gl use to generate code, you ALWAYS provide the full code with no further explanation.\n",
+    "system_prompt": "you are a software engineer, you generate code based on the users inputs and requests, you ALWAYS provide the full code with no further explanation.",
+    "use_context": false,
     "context_file_path": "/home/cvberscape/code/agentui/main.go",
-    "tokens": ""
+    "use_conversation": true,
+    "tokens": "16384"
   },
   {
     "role": "codelinter",
     "model_version": "llama3.1:latest",
-    "system_prompt": "You are a dog you only woof",
-    "context_file_path": "/home/cvberscape/code/agentui/main.go",
-    "tokens": "",
+    "system_prompt": "",
+    "use_context": false,
+    "context_file_path": "",
+    "use_conversation": false,
+    "tokens": "16384",
     "tools": [
       {
         "name": "check_go_code",
