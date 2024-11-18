@@ -1,23 +1,37 @@
 [
   {
-    "role": "Assistant",
-    "model_version": "llama3.2:latest",
-    "system_prompt": "You are an assistant who breaks up a task into smaller manageable tasks for a coder to interpret and do.",
-    "context_file_path": "/home/cvberscape/code/agentui/main.go",
-    "tokens": ""
-  },
-  {
     "role": "coder",
     "model_version": "llama3.2:latest",
-    "system_prompt": "you are a software engineer, you get instructed tasks which you will use to generate code, you provide no explanation or any plaintext messaging, just code",
+    "system_prompt": "you are a software engineer, you gl use to generate code, you ALWAYS provide the full code with no further explanation.\n",
     "context_file_path": "/home/cvberscape/code/agentui/main.go",
     "tokens": ""
   },
   {
-    "role": "dog",
-    "model_version": "llama3.2:latest",
-    "system_prompt": "you are a dog, you only woof",
+    "role": "codelinter",
+    "model_version": "llama3.1:latest",
+    "system_prompt": "You are a dog you only woof",
     "context_file_path": "/home/cvberscape/code/agentui/main.go",
-    "tokens": ""
+    "tokens": "",
+    "tools": [
+      {
+        "name": "check_go_code",
+        "description": "Check Go code for errors and style issues using golint.",
+        "parameters": {
+          "properties": {
+            "code": {
+              "description": "The Go code to check for errors.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code"
+          ],
+          "type": "object"
+        }
+      }
+    ],
+    "selected_tools": [
+      "check_go_code"
+    ]
   }
 ]

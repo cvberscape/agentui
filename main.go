@@ -1,15 +1,18 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"go/format"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -46,12 +49,50 @@ type agentUpdatedMsg struct {
 	Role string
 }
 
+type Tool struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Parameters  map[string]interface{} `json:"parameters"`
+}
+
+type ToolUsage struct {
+	Timestamp    time.Time `json:"timestamp"`
+	AgentRole    string    `json:"agent_role"`
+	ToolName     string    `json:"tool_name"`
+	Input        string    `json:"input,omitempty"`
+	Output       string    `json:"output"`
+	Success      bool      `json:"success"`
+	ErrorMessage string    `json:"error_message,omitempty"`
+}
+
+type ToolCall struct {
+	Name       string            `json:"name"`
+	Parameters map[string]string `json:"parameters"`
+}
+
 type Agent struct {
-	Role            string `json:"role"`
-	ModelVersion    string `json:"model_version"`
-	SystemPrompt    string `json:"system_prompt"`
-	ContextFilePath string `json:"context_file_path"`
-	Tokens          string `json:"tokens"`
+	Role            string   `json:"role"`
+	ModelVersion    string   `json:"model_version"`
+	SystemPrompt    string   `json:"system_prompt"`
+	ContextFilePath string   `json:"context_file_path"`
+	Tokens          string   `json:"tokens"`
+	Tools           []Tool   `json:"tools,omitempty"`          // Existing field for tools
+	SelectedTools   []string `json:"selected_tools,omitempty"` // New field for form selections
+}
+
+var checkGoCodeTool = Tool{
+	Name:        "check_go_code",
+	Description: "Check Go code for errors and style issues using golint.",
+	Parameters: map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"code": map[string]interface{}{
+				"type":        "string",
+				"description": "The Go code to check for errors.",
+			},
+		},
+		"required": []string{"code"},
+	},
 }
 
 type viewMode int
@@ -144,6 +185,9 @@ type model struct {
 	availableModelVersions []string
 	modelsFetchError       error
 	errorMessage           string
+	availableTools         []Tool
+	toolUsages             []ToolUsage
+	toolUsageFilePath      string
 }
 
 type ChatConfig struct {
@@ -226,10 +270,20 @@ func createConfigForm(config *ChatConfig, modelVersions []string) *huh.Form {
 	return form
 }
 
-func createAgentForm(agent *Agent, modelVersions []string) *huh.Form {
+func createAgentForm(agent *Agent, modelVersions []string, availableTools []Tool) *huh.Form {
+	// Initialize SelectedTools to an empty slice if it's nil
+	if agent.SelectedTools == nil {
+		agent.SelectedTools = []string{}
+	}
+
 	modelOptions := make([]huh.Option[string], 0, len(modelVersions))
 	for _, mv := range modelVersions {
 		modelOptions = append(modelOptions, huh.NewOption(mv, mv))
+	}
+
+	toolOptions := make([]huh.Option[string], 0, len(availableTools))
+	for _, tool := range availableTools {
+		toolOptions = append(toolOptions, huh.NewOption(tool.Name, tool.Name))
 	}
 
 	form := huh.NewForm(
@@ -257,6 +311,11 @@ func createAgentForm(agent *Agent, modelVersions []string) *huh.Form {
 				Title("Tokens").
 				Placeholder("16384").
 				Value(&agent.Tokens),
+
+			huh.NewMultiSelect[string]().
+				Title("Tools").
+				Options(toolOptions...).
+				Value(&agent.SelectedTools), // Use SelectedTools here
 		),
 	).WithShowHelp(true)
 	return form
@@ -349,6 +408,13 @@ func InitialModel() *model {
 		table.WithStyles(tableStyle),
 	)
 
+	// Define available tools
+	availableTools := []Tool{
+		checkGoCodeTool,
+		// Add more tools here if needed
+	}
+
+	// Assign availableTools to the model's field
 	m := &model{
 		userMessages:        make([]string, 0),
 		assistantResponses:  make([]string, 0),
@@ -369,16 +435,18 @@ func InitialModel() *model {
 			ContextFilePath: defaultContextFilePath,
 			Tokens:          defaultTokens,
 		},
-		formActive:      false,
-		agents:          []Agent{},
-		agentsTable:     agentsTable,
-		agentViewMode:   ChatView,
-		agentFormActive: false,
-
+		formActive:             false,
+		agents:                 []Agent{},
+		agentsTable:            agentsTable,
+		agentViewMode:          ChatView,
+		agentFormActive:        false,
+		availableTools:         availableTools, // Assigned here
 		availableModelVersions: []string{},
 		modelsFetchError:       nil,
 		errorMessage:           "",
 		confirmDeleteType:      "",
+		toolUsages:             []ToolUsage{}, // Initialize as empty
+		toolUsageFilePath:      "./tool_usages.json",
 	}
 
 	err := loadAgents(m)
@@ -402,9 +470,16 @@ func InitialModel() *model {
 		if err != nil {
 			log.Printf("Failed to save default agents: %v", err)
 		}
+		err := loadToolUsages(m)
+		if err != nil {
+			log.Printf("Error loading tool usages: %v", err)
+		}
 	}
 
 	m.populateAgentsTable()
+
+	// Pass m.availableTools to createAgentForm
+	m.agentForm = createAgentForm(&m.currentEditingAgent, m.availableModelVersions, m.availableTools)
 
 	m.availableModelVersions = []string{defaultModelVersion}
 
@@ -413,6 +488,42 @@ func InitialModel() *model {
 	m.updateTextareaIndicatorColor()
 
 	return m
+}
+
+func saveToolUsages(m *model) error {
+	data, err := json.MarshalIndent(m.toolUsages, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal tool usages: %w", err)
+	}
+
+	err = ioutil.WriteFile(m.toolUsageFilePath, data, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write tool usages to file: %w", err)
+	}
+
+	return nil
+}
+
+func loadToolUsages(m *model) error {
+	if _, err := os.Stat(m.toolUsageFilePath); os.IsNotExist(err) {
+		// File does not exist; initialize with empty slice
+		m.toolUsages = []ToolUsage{}
+		return nil
+	}
+
+	data, err := ioutil.ReadFile(m.toolUsageFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to read tool usages file: %w", err)
+	}
+
+	var loadedUsages []ToolUsage
+	err = json.Unmarshal(data, &loadedUsages)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal tool usages: %w", err)
+	}
+
+	m.toolUsages = loadedUsages
+	return nil
 }
 
 func (m *model) populateAgentsTable() {
@@ -596,16 +707,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch m.agentForm.State {
 		case huh.StateCompleted:
-			originalRole := ""
-			if m.agentAction == "edit" {
-				originalRole = m.selectedAgent.Role
+			// Clear existing Tools
+			m.currentEditingAgent.Tools = []Tool{}
+
+			// Map selected tool names to Tool structs
+			for _, toolName := range m.currentEditingAgent.SelectedTools {
+				for _, availableTool := range m.availableTools {
+					if availableTool.Name == toolName {
+						m.currentEditingAgent.Tools = append(m.currentEditingAgent.Tools, availableTool)
+						break
+					}
+				}
 			}
 
-			if err := ValidateAgentRole(m, m.currentEditingAgent.Role, originalRole); err != nil {
-				m.errorMessage = err.Error()
-				return m, nil
-			}
-
+			// Proceed with adding or editing the agent
 			if m.agentAction == "add" {
 				m.agents = append(m.agents, m.currentEditingAgent)
 				log.Printf("Added new agent with role: %s\n", m.currentEditingAgent.Role)
@@ -740,7 +855,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.viewMode == AgentView {
 				m.agentAction = "add"
 				m.currentEditingAgent = Agent{}
-				m.agentForm = createAgentForm(&m.currentEditingAgent, m.availableModelVersions)
+				m.agentForm = createAgentForm(&m.currentEditingAgent, m.availableModelVersions, m.availableTools)
 				m.agentFormActive = true
 				m.viewMode = AgentFormView
 				m.agentsTable.Blur()
@@ -761,8 +876,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				m.agentAction = "edit"
-				m.agentForm = createAgentForm(&m.currentEditingAgent, m.availableModelVersions)
-				m.agentFormActive = true
+				m.agentForm = createAgentForm(&m.currentEditingAgent, m.availableModelVersions, m.availableTools)
 				m.viewMode = AgentFormView
 				m.agentsTable.Blur()
 				return m, nil
@@ -953,26 +1067,226 @@ func processAgentChain(input string, m *model, agent Agent) (string, error) {
 		return "", fmt.Errorf("failed to load context for agent '%s': %w", agent.Role, err)
 	}
 
-	systemPrompt := strings.ReplaceAll(agent.SystemPrompt, "{context}", contextContent)
+	hasCodeChecker := false
+	for _, tool := range agent.Tools {
+		if tool.Name == "check_go_code" {
+			hasCodeChecker = true
+			break
+		}
+	}
 
-	messagesForAgent := []map[string]string{
-		{
-			"role":    "system",
-			"content": systemPrompt,
-		},
-		{
+	codeBlocks := extractCodeBlocks(input)
+	hasCode := len(codeBlocks) > 0
+
+	// Enhanced system prompt with more specific instructions
+	var systemPrompt string
+	if hasCodeChecker && hasCode {
+		systemPrompt = fmt.Sprintf(`%s
+
+As a code review assistant, you have access to a Go code checking tool. Follow these steps for each piece of code you receive:
+
+1. First, analyze the code yourself and provide your initial thoughts on:
+   - Code structure and organization
+   - Potential issues or improvements
+   - Best practices adherence
+
+2. Use the check_go_code tool to verify the code's quality
+
+3. After receiving the tool's output:
+   - Analyze the lint results
+   - Explain any issues found
+   - Suggest specific improvements
+   - If necessary, provide corrected code
+
+4. Provide a comprehensive response that includes:
+   - Your initial analysis
+   - Interpretation of lint results
+   - Specific recommendations
+   - Corrected code (if needed)
+
+Remember to explain your reasoning and provide context for your suggestions.
+
+Context: %s`, agent.SystemPrompt, contextContent)
+	} else {
+		systemPrompt = strings.ReplaceAll(agent.SystemPrompt, "{context}", contextContent)
+	}
+
+	// Create initial messages for the agent
+	var messages []map[string]string
+	messages = append(messages, map[string]string{
+		"role":    "system",
+		"content": systemPrompt,
+	})
+
+	// If this is a code review agent, format the input to explicitly request analysis
+	if hasCodeChecker && hasCode {
+		messages = append(messages, map[string]string{
+			"role": "user",
+			"content": fmt.Sprintf(`Please review this Go code and provide a detailed analysis:
+
+%s
+
+First provide your initial analysis, then use the code checking tool to verify the code, and finally provide your recommendations based on both your analysis and the tool's output.`, input),
+		})
+	} else {
+		messages = append(messages, map[string]string{
 			"role":    "user",
 			"content": input,
-		},
+		})
 	}
 
-	response, err := requestOllama(messagesForAgent, agent)
+	// Prepare tools if agent has them
+	var tools []map[string]interface{}
+	if hasCodeChecker {
+		tools = []map[string]interface{}{
+			{
+				"type": "function",
+				"function": map[string]interface{}{
+					"name":        "check_go_code",
+					"description": "Check Go code for errors and style issues using golint.",
+					"parameters": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"code": map[string]interface{}{
+								"type":        "string",
+								"description": "The Go code to check for errors.",
+							},
+						},
+						"required": []string{"code"},
+					},
+				},
+			},
+		}
+	}
+
+	// Prepare API request
+	payload := map[string]interface{}{
+		"model":    agent.ModelVersion,
+		"messages": messages,
+		"stream":   false,
+	}
+	if len(tools) > 0 {
+		payload["tools"] = tools
+	}
+
+	requestBody, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("Error from agent '%s': %v\n", agent.Role, err)
-		return "", err
+		return "", fmt.Errorf("failed to marshal request body for agent '%s': %w", agent.Role, err)
 	}
 
-	return response, nil
+	// Send request to Ollama API
+	resp, err := http.Post(ollamaAPIURL+"/chat", "application/json", bytes.NewBuffer(requestBody))
+	if err != nil {
+		return "", fmt.Errorf("failed to send request to Ollama API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := ioutil.ReadAll(resp.Body)
+		return "", fmt.Errorf("Ollama API error: %s", string(body))
+	}
+
+	var apiResponse struct {
+		Message struct {
+			Role      string `json:"role"`
+			Content   string `json:"content"`
+			ToolCalls []struct {
+				Function struct {
+					Name      string          `json:"name"`
+					Arguments json.RawMessage `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"message"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&apiResponse); err != nil {
+		return "", fmt.Errorf("failed to decode Ollama API response: %w", err)
+	}
+
+	var fullResponse strings.Builder
+	fullResponse.WriteString(fmt.Sprintf("Response from %s:\n\n", agent.Role))
+
+	// First, add the agent's initial analysis
+	fullResponse.WriteString(apiResponse.Message.Content)
+
+	// Then process any tool calls and add their results
+	if len(apiResponse.Message.ToolCalls) > 0 {
+		for _, toolCall := range apiResponse.Message.ToolCalls {
+			if toolCall.Function.Name == "check_go_code" {
+				toolCallJSON := map[string]interface{}{
+					"name":       toolCall.Function.Name,
+					"parameters": json.RawMessage(toolCall.Function.Arguments),
+				}
+
+				toolCallData, err := json.Marshal(toolCallJSON)
+				if err != nil {
+					return "", fmt.Errorf("failed to marshal tool call: %w", err)
+				}
+
+				code, err := parseToolCall(toolCallData)
+				if err != nil {
+					return "", fmt.Errorf("failed to parse tool call: %w", err)
+				}
+
+				lintResult, err := executeGolangciLint(code, agent.Role, m)
+				if err != nil {
+					// Send the lint results back to the agent for analysis
+					analysisMessages := append(messages,
+						map[string]string{
+							"role":    "assistant",
+							"content": apiResponse.Message.Content,
+						},
+						map[string]string{
+							"role":    "user",
+							"content": fmt.Sprintf("The code checking tool found some issues. Please analyze these results and provide specific recommendations:\n\n%s", lintResult),
+						},
+					)
+
+					// Make a second API call to get the agent's analysis of the lint results
+					analysisPayload := map[string]interface{}{
+						"model":    agent.ModelVersion,
+						"messages": analysisMessages,
+						"stream":   false,
+					}
+
+					analysisBody, err := json.Marshal(analysisPayload)
+					if err != nil {
+						return "", fmt.Errorf("failed to marshal analysis request: %w", err)
+					}
+
+					analysisResp, err := http.Post(ollamaAPIURL+"/chat", "application/json", bytes.NewBuffer(analysisBody))
+					if err != nil {
+						return "", fmt.Errorf("failed to get lint analysis: %w", err)
+					}
+					defer analysisResp.Body.Close()
+
+					var analysisResponse struct {
+						Message struct {
+							Content string `json:"content"`
+						} `json:"message"`
+					}
+
+					if err := json.NewDecoder(analysisResp.Body).Decode(&analysisResponse); err != nil {
+						return "", fmt.Errorf("failed to decode analysis response: %w", err)
+					}
+
+					fullResponse.WriteString("\n\nTool Analysis:\n")
+					fullResponse.WriteString(analysisResponse.Message.Content)
+				} else {
+					fullResponse.WriteString("\n\nCode check passed successfully:\n")
+					fullResponse.WriteString(lintResult)
+				}
+			}
+		}
+	}
+
+	// Add the final response to conversation history
+	m.conversationHistory = append(m.conversationHistory, map[string]string{
+		"role":    "assistant",
+		"content": fullResponse.String(),
+	})
+
+	return fullResponse.String(), nil
 }
 
 func (m *model) moveAgentUp() {
@@ -1107,7 +1421,7 @@ func (m *model) handleEnterKey() (tea.Model, tea.Cmd) {
 		if agentRole == "Add New Agent" {
 			m.agentAction = "add"
 			m.currentEditingAgent = Agent{}
-			m.agentForm = createAgentForm(&m.currentEditingAgent, m.availableModelVersions)
+			m.agentForm = createAgentForm(&m.currentEditingAgent, m.availableModelVersions, m.availableTools)
 			m.agentFormActive = true
 			m.viewMode = AgentFormView
 			m.agentsTable.Blur()
@@ -1122,7 +1436,7 @@ func (m *model) handleEnterKey() (tea.Model, tea.Cmd) {
 			}
 
 			m.agentAction = "edit"
-			m.agentForm = createAgentForm(&m.currentEditingAgent, m.availableModelVersions)
+			m.agentForm = createAgentForm(&m.currentEditingAgent, m.availableModelVersions, m.availableTools)
 			m.agentFormActive = true
 			m.viewMode = AgentFormView
 			m.agentsTable.Blur()
@@ -1309,25 +1623,31 @@ func sendChatMessage(m *model) tea.Cmd {
 			return nil
 		}
 
+		// Add user message to conversation history
 		m.conversationHistory = append(m.conversationHistory, map[string]string{
 			"role":    "user",
 			"content": m.currentUserMessage,
 		})
 
-		responses, err := processAgentsSequentially(m, m.currentUserMessage, m.agents)
-		if err != nil {
-			return errMsg(err)
+		if len(m.agents) == 0 {
+			return errMsg(fmt.Errorf("no agents configured"))
 		}
 
-		for i, response := range responses {
-			agent := m.agents[i]
-			m.conversationHistory = append(m.conversationHistory, map[string]string{
-				"role":    agent.Role,
-				"content": response,
-			})
-			m.assistantResponses = append(m.assistantResponses, response)
+		var lastResponse string
+		currentInput := m.currentUserMessage
+
+		// Process each agent in sequence
+		for _, agent := range m.agents {
+			response, err := processAgentChain(currentInput, m, agent)
+			if err != nil {
+				return errMsg(fmt.Errorf("error processing agent '%s': %w", agent.Role, err))
+			}
+			lastResponse = response
+			currentInput = response // Use this agent's response as input for the next agent
 		}
 
+		// Update the model's state
+		m.assistantResponses = append(m.assistantResponses, lastResponse)
 		m.userMessages = append(m.userMessages, m.currentUserMessage)
 		m.currentUserMessage = ""
 		m.loading = false
@@ -1335,8 +1655,157 @@ func sendChatMessage(m *model) tea.Cmd {
 		m.textarea.Blur()
 		m.updateViewport()
 
-		return responseMsg("Conversation processed with configured agents.")
+		return responseMsg("Conversation processed successfully.")
 	}
+}
+
+func parseToolCall(jsonData []byte) (string, error) {
+	var toolCall struct {
+		Name       string `json:"name"`
+		Parameters struct {
+			Code string `json:"code"`
+		} `json:"parameters"`
+	}
+
+	if err := json.Unmarshal(jsonData, &toolCall); err != nil {
+		return "", fmt.Errorf("failed to unmarshal tool call: %w", err)
+	}
+
+	if toolCall.Parameters.Code == "" {
+		return "", fmt.Errorf("code parameter not found in tool call")
+	}
+
+	// Clean up the code
+	code := toolCall.Parameters.Code
+	// Remove literal \n and replace with actual newlines
+	code = strings.ReplaceAll(code, "\\n", "\n")
+	// Remove escaped quotes
+	code = strings.ReplaceAll(code, "\\\"", "\"")
+	// Remove any triple quotes that might be present
+	code = strings.Trim(code, "\"\"\"")
+
+	return code, nil
+}
+
+func escapeJSONString(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return s
+	}
+	// Remove the surrounding quotes that json.Marshal adds
+	return string(b[1 : len(b)-1])
+}
+
+func executeGolangciLint(code string, agentRole string, m *model) (string, error) {
+	// Add package main if not present
+	if !strings.Contains(code, "package ") {
+		code = "package main\n\n" + code
+	}
+
+	// Format the code using go/format
+	formattedBytes, err := format.Source([]byte(code))
+	if err != nil {
+		return fmt.Sprintf("Code formatting error: %v\nOriginal code:\n%s", err, code), fmt.Errorf("code formatting failed: %w", err)
+	}
+
+	formattedCode := string(formattedBytes)
+
+	// Write the formatted code to a temporary file
+	tmpFile, err := ioutil.TempFile("", "code_*.go")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(formattedCode); err != nil {
+		return "", fmt.Errorf("failed to write code to temp file: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		return "", fmt.Errorf("failed to close temp file: %w", err)
+	}
+
+	// Create a temporary directory for the module
+	tmpDir, err := ioutil.TempDir("", "golint_*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Initialize a Go module in the temporary directory
+	modInit := exec.Command("go", "mod", "init", "lintcheck")
+	modInit.Dir = tmpDir
+	if err := modInit.Run(); err != nil {
+		return "", fmt.Errorf("failed to initialize Go module: %w", err)
+	}
+
+	// Copy the code file to the module directory
+	destFile := filepath.Join(tmpDir, "main.go")
+	if err := copyFile(tmpFile.Name(), destFile); err != nil {
+		return "", fmt.Errorf("failed to copy file to module directory: %w", err)
+	}
+
+	// Execute golangci-lint
+	cmd := exec.Command("golangci-lint", "run",
+		"--disable-all",
+		"--enable=errcheck",
+		"--enable=gofmt",
+		"--enable=govet",
+		"--enable=staticcheck",
+		"--enable=unused")
+	cmd.Dir = tmpDir
+	output, err := cmd.CombinedOutput()
+
+	// Prepare the lint result
+	var lintResult string
+	if err != nil {
+		// If there are lint issues, include both the formatted code and the lint output
+		lintResult = fmt.Sprintf("Formatted code:\n```go\n%s\n```\n\nLint issues:\n```\n%s\n```",
+			formattedCode, string(output))
+	} else {
+		lintResult = fmt.Sprintf("Code is properly formatted and passes all lint checks:\n```go\n%s\n```",
+			formattedCode)
+	}
+
+	// Log tool usage
+	usage := ToolUsage{
+		Timestamp: time.Now(),
+		AgentRole: agentRole,
+		ToolName:  "check_go_code",
+		Input:     code,
+		Output:    lintResult,
+		Success:   err == nil,
+		ErrorMessage: func() string {
+			if err != nil {
+				return err.Error()
+			}
+			return ""
+		}(),
+	}
+	m.toolUsages = append(m.toolUsages, usage)
+	if err := saveToolUsages(m); err != nil {
+		log.Printf("Failed to save tool usage: %v", err)
+	}
+
+	return lintResult, nil
+}
+
+// Helper function to copy a file
+func copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	_, err = io.Copy(destFile, sourceFile)
+	return err
 }
 
 func processAgentsSequentially(m *model, input string, agents []Agent) ([]string, error) {
@@ -1357,16 +1826,150 @@ func processAgentsSequentially(m *model, input string, agents []Agent) ([]string
 }
 
 func processAgent(messages []map[string]string, m *model, agent Agent) (string, error) {
-	role := strings.ToLower(agent.Role)
-
-	switch role {
-	case "assistant":
-		return generateCode(messages, m, agent)
-	case "tester":
-		return testCode(messages, m, agent)
-	default:
-		return dynamicAgentBehavior(messages, m, agent)
+	// First, check if this agent has the code checking tool
+	hasCodeChecker := false
+	for _, tool := range agent.Tools {
+		if tool.Name == "check_go_code" {
+			hasCodeChecker = true
+			break
+		}
 	}
+
+	// Extract code from the last message (either user or another agent)
+	var codeToCheck string
+	var lastMessage string
+	if len(messages) > 0 {
+		lastMessage = messages[len(messages)-1]["content"]
+		// Extract any code blocks from the message
+		codeBlocks := extractCodeBlocks(lastMessage)
+		if len(codeBlocks) > 0 {
+			codeToCheck = strings.Join(codeBlocks, "\n")
+		}
+	}
+
+	// If the agent has the code checker and there's code to check, enhance the prompt
+	if hasCodeChecker && codeToCheck != "" {
+		contextContent, err := loadFileContext(agent.ContextFilePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to load context for agent '%s': %w", agent.Role, err)
+		}
+
+		// Create an enhanced system prompt that includes code checking instructions
+		enhancedSystemPrompt := fmt.Sprintf(`%s
+
+You have access to a Go code checking tool. When you receive code, you should:
+1. Analyze the code first
+2. Use the check_go_code tool to verify it
+3. Review the tool's output
+4. Provide your analysis and suggestions based on both your review and the tool's output
+5. If there are issues, provide corrected code
+
+Context: %s`, agent.SystemPrompt, contextContent)
+
+		// Prepare the API request with tools
+		payload := map[string]interface{}{
+			"model": agent.ModelVersion,
+			"messages": []map[string]string{
+				{
+					"role":    "system",
+					"content": enhancedSystemPrompt,
+				},
+				{
+					"role":    "user",
+					"content": lastMessage,
+				},
+			},
+			"stream": false,
+			"tools": []map[string]interface{}{
+				{
+					"type": "function",
+					"function": map[string]interface{}{
+						"name":        "check_go_code",
+						"description": "Check Go code for errors and style issues using golint.",
+						"parameters": map[string]interface{}{
+							"type": "object",
+							"properties": map[string]interface{}{
+								"code": map[string]interface{}{
+									"type":        "string",
+									"description": "The Go code to check for errors.",
+								},
+							},
+							"required": []string{"code"},
+						},
+					},
+				},
+			},
+		}
+
+		requestBody, err := json.Marshal(payload)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal request body: %w", err)
+		}
+
+		// Send request to Ollama API
+		resp, err := http.Post(ollamaAPIURL+"/chat", "application/json", bytes.NewBuffer(requestBody))
+		if err != nil {
+			return "", fmt.Errorf("failed to send request to Ollama API: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := ioutil.ReadAll(resp.Body)
+			return "", fmt.Errorf("Ollama API error: %s", string(body))
+		}
+
+		var apiResponse struct {
+			Message struct {
+				Role      string `json:"role"`
+				Content   string `json:"content"`
+				ToolCalls []struct {
+					Function struct {
+						Name      string          `json:"name"`
+						Arguments json.RawMessage `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&apiResponse); err != nil {
+			return "", fmt.Errorf("failed to decode Ollama API response: %w", err)
+		}
+
+		// Handle tool calls and build response
+		var fullResponse strings.Builder
+		fullResponse.WriteString(apiResponse.Message.Content)
+
+		for _, toolCall := range apiResponse.Message.ToolCalls {
+			if toolCall.Function.Name == "check_go_code" {
+				toolCallJSON := map[string]interface{}{
+					"name":       toolCall.Function.Name,
+					"parameters": json.RawMessage(toolCall.Function.Arguments),
+				}
+
+				toolCallData, err := json.Marshal(toolCallJSON)
+				if err != nil {
+					return "", fmt.Errorf("failed to marshal tool call: %w", err)
+				}
+
+				code, err := parseToolCall(toolCallData)
+				if err != nil {
+					return "", fmt.Errorf("failed to parse tool call: %w", err)
+				}
+
+				lintResult, err := executeGolangciLint(code, agent.Role, m)
+				if err != nil {
+					fullResponse.WriteString("\n\nLint Check Result:\n" + lintResult)
+				} else {
+					fullResponse.WriteString("\n\nLint Check Result:\n" + lintResult)
+				}
+			}
+		}
+
+		return fullResponse.String(), nil
+	}
+
+	// If no code checker or no code to check, process normally
+	return dynamicAgentBehavior(messages, m, agent)
 }
 
 func dynamicAgentBehavior(messages []map[string]string, m *model, agent Agent) (string, error) {
@@ -1450,11 +2053,24 @@ func messagesForAgent(m *model, agent Agent) []map[string]string {
 func (m *model) updateViewport() {
 	var conversation strings.Builder
 	for _, msg := range m.conversationHistory {
-		conversation.WriteString(fmt.Sprintf("**%s:**\n\n%s\n\n", strings.Title(msg["role"]), msg["content"]))
+		role := strings.Title(msg["role"])
+		content := msg["content"]
+
+		switch strings.ToLower(role) {
+		case "user":
+			conversation.WriteString(fmt.Sprintf("**%s:**\n\n%s\n\n", role, content))
+		case "assistant":
+			conversation.WriteString(fmt.Sprintf("**%s:**\n\n%s\n\n", role, content))
+		case "tool":
+			conversation.WriteString(fmt.Sprintf("**%s:**\n\n```plaintext\n%s\n```\n\n", role, content))
+		default:
+			conversation.WriteString(fmt.Sprintf("**%s:**\n\n%s\n\n", role, content))
+		}
 	}
 
 	renderedContent, err := m.renderer.Render(conversation.String())
 	if err != nil {
+		log.Printf("Error rendering conversation: %v", err)
 		return
 	}
 	m.viewport.SetContent(renderedContent)
@@ -1615,21 +2231,29 @@ func testCode(messages []map[string]string, m *model, agent Agent) (string, erro
 
 func extractCodeBlocks(input string) []string {
 	var codeBlocks []string
-	lines := strings.Split(input, "\n")
-	var isInCodeBlock bool
 	var currentBlock strings.Builder
+	inCodeBlock := false
+	isGoBlock := false
 
-	for _, line := range lines {
-		trimmedLine := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmedLine, "```") {
-			if isInCodeBlock {
-				codeBlocks = append(codeBlocks, currentBlock.String())
+	scanner := bufio.NewScanner(strings.NewReader(input))
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if strings.HasPrefix(line, "```") {
+			if !inCodeBlock {
+				// Starting a code block
+				inCodeBlock = true
+				isGoBlock = strings.HasPrefix(line, "```go")
 				currentBlock.Reset()
-				isInCodeBlock = false
 			} else {
-				isInCodeBlock = true
+				// Ending a code block
+				if isGoBlock {
+					codeBlocks = append(codeBlocks, currentBlock.String())
+				}
+				inCodeBlock = false
+				isGoBlock = false
 			}
-		} else if isInCodeBlock {
+		} else if inCodeBlock && isGoBlock {
 			currentBlock.WriteString(line + "\n")
 		}
 	}
