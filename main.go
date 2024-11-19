@@ -309,7 +309,7 @@ func newChatDelegate() chatDelegate {
 
 // Height returns the fixed height for each list item
 func (d chatDelegate) Height() int {
-	return 3 // One line for title, one for description, and one for the bottom margin
+	return 3 // Changed from 3 to 2: one line for title, one for description
 }
 
 // Spacing returns zero to let the styles handle spacing
