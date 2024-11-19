@@ -32,10 +32,39 @@ import (
 )
 
 type Chat struct {
-	ID        string              `json:"id"`
-	Name      string              `json:"name"`
-	CreatedAt time.Time           `json:"created_at"`
-	Messages  []map[string]string `json:"messages"`
+	ID          string              `json:"id"`
+	Name        string              `json:"name"`
+	ProjectName string              `json:"project_name"` // Added field
+	CreatedAt   time.Time           `json:"created_at"`
+	Messages    []map[string]string `json:"messages"`
+}
+type chatItem struct {
+	chat Chat
+}
+
+func (i chatItem) FilterValue() string {
+	return i.chat.Name
+}
+
+// Title returns the chat name for the list item
+func (i chatItem) Title() string {
+	return i.chat.Name
+}
+
+var docStyle = lipgloss.NewStyle().Margin(1, 2)
+
+func (i chatItem) Description() string {
+	return fmt.Sprintf("Project: %s | Created: %s | Messages: %d",
+		i.chat.ProjectName,
+		i.chat.CreatedAt.Format("2006-01-02 15:04:05"),
+		len(i.chat.Messages))
+}
+
+// chatDelegate customizes the list item rendering
+type chatDelegate struct {
+	styles struct {
+		normal, selected lipgloss.Style
+	}
 }
 
 type (
@@ -119,7 +148,8 @@ const (
 	ParameterSizesView
 	DownloadingView
 	ConfirmDelete
-	ChatListView // New view for list of chats
+	ChatListView viewMode = iota // Add this to your existing viewMode constants
+	NewChatFormView
 )
 
 const (
@@ -205,6 +235,9 @@ type model struct {
 	chatList               list.Model
 	selectedChat           *Chat
 	chatsFolderPath        string
+	newChatForm            *huh.Form
+	newChatName            string
+	newProjectName         string
 }
 
 type ChatConfig struct {
@@ -253,6 +286,219 @@ func loadAgents(m *model) error {
 	}
 
 	m.agents = loadedAgents
+
+	return nil
+}
+
+func newChatDelegate() chatDelegate {
+	d := chatDelegate{}
+
+	d.styles.normal = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Padding(0, 0, 0, 2).
+		MarginBottom(1) // Add consistent bottom margin
+
+	d.styles.selected = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#000000")).
+		Background(lipgloss.Color("#00FF00")).
+		Padding(0, 0, 0, 2).
+		MarginBottom(1) // Add consistent bottom margin
+
+	return d
+}
+
+// Height returns the fixed height for each list item
+func (d chatDelegate) Height() int {
+	return 2 // Changed from 3 to 2: one line for title, one for description
+}
+
+// Spacing returns zero to let the styles handle spacing
+func (d chatDelegate) Spacing() int {
+	return 0
+}
+
+// Update implements list.ItemDelegate
+func (d chatDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd {
+	return nil
+}
+
+// Render implements list.ItemDelegate
+func (d chatDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	i, ok := listItem.(chatItem)
+	if !ok {
+		return
+	}
+
+	// Create the display strings
+	title := i.Title()
+	desc := i.Description()
+
+	// Build the final string with exactly two lines
+	str := fmt.Sprintf("%s\n%s", title, desc)
+
+	// Apply the appropriate style
+	fn := d.styles.normal.Render
+	if index == m.Index() {
+		fn = d.styles.selected.Render
+	}
+
+	// Write the styled string
+	fmt.Fprint(w, fn(str))
+}
+
+func createNewChatForm(name *string, projectName *string) *huh.Form {
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Chat Name").
+				Placeholder("Enter a name for the new chat").
+				Value(name).
+				Validate(func(s string) error {
+					if strings.TrimSpace(s) == "" {
+						return fmt.Errorf("chat name cannot be empty")
+					}
+					if len(s) > 50 {
+						return fmt.Errorf("chat name too long (max 50 characters)")
+					}
+					return nil
+				}),
+
+			huh.NewInput().
+				Title("Project Name").
+				Placeholder("Enter the project name").
+				Value(projectName).
+				Validate(func(s string) error {
+					if strings.TrimSpace(s) == "" {
+						return fmt.Errorf("project name cannot be empty")
+					}
+					if len(s) > 100 {
+						return fmt.Errorf("project name too long (max 100 characters)")
+					}
+					return nil
+				}),
+		),
+	).WithShowHelp(true)
+	form.NextField()
+	form.PrevField()
+	return form
+}
+
+// Initialize chat list component
+func (m *model) initializeChatList() error {
+	// Create chats directory if it doesn't exist
+	if err := os.MkdirAll(m.chatsFolderPath, 0755); err != nil {
+		return fmt.Errorf("failed to create chats directory: %w", err)
+	}
+
+	// Load existing chats
+	chats, err := loadChats(m.chatsFolderPath)
+	if err != nil {
+		return fmt.Errorf("failed to load chats: %w", err)
+	}
+
+	// Convert chats to list items
+	items := make([]list.Item, 0, len(chats)+1)
+	items = append(items, chatItem{Chat{Name: "Create New Chat", ProjectName: ""}})
+	for _, chat := range chats {
+		items = append(items, chatItem{chat})
+	}
+
+	delegate := newChatDelegate()
+	m.chatList = list.New(items, delegate, m.width, m.height-4) // Set initial size using full height
+	m.chatList.Title = "Chat List"
+	m.chatList.SetShowStatusBar(false)
+	m.chatList.SetFilteringEnabled(true)
+	m.chatList.Styles.Title = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Background(lipgloss.Color("#666666")).
+		Padding(0, 1)
+
+	// Set additional styles for better visibility
+	m.chatList.Styles.NoItems = lipgloss.NewStyle().Margin(1, 2)
+	m.chatList.SetSize(m.width, m.height-4) // Set size again to ensure proper layout
+
+	return nil
+}
+
+func triggerWindowResize(width, height int) tea.Cmd {
+	return func() tea.Msg {
+		return tea.WindowSizeMsg{
+			Width:  width,
+			Height: height,
+		}
+	}
+}
+
+// Update the model to handle chat list interactions
+func (m *model) updateChatList(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		headerHeight := 3 // Account for header and padding
+		m.chatList.SetSize(msg.Width-2, msg.Height-headerHeight)
+		return m, nil
+
+	case tea.KeyMsg:
+		switch keypress := msg.String(); keypress {
+		case "up", "k":
+			if m.chatList.Index() > 0 {
+				m.chatList.CursorUp()
+			}
+			return m, nil
+
+		case "down", "j":
+			if m.chatList.Index() < len(m.chatList.Items())-1 {
+				m.chatList.CursorDown()
+			}
+			return m, nil
+
+		case "enter":
+			selectedItem := m.chatList.SelectedItem()
+			if selectedItem == nil {
+				return m, nil
+			}
+
+			if chatItem, ok := selectedItem.(chatItem); ok {
+				if chatItem.chat.Name == "Create New Chat" {
+					m.viewMode = NewChatFormView
+					m.formActive = true
+					m.newChatName = ""
+					m.newProjectName = ""
+					m.newChatForm = createNewChatForm(&m.newChatName, &m.newProjectName)
+					return m, nil
+				}
+
+				// Load and switch to the selected chat
+				m.selectedChat = &chatItem.chat
+				m.conversationHistory = chatItem.chat.Messages
+				m.viewMode = ChatView
+				m.updateViewport()
+				return m, nil
+			}
+		}
+	}
+
+	// For other messages, pass them to the chatList's update function
+	m.chatList, cmd = m.chatList.Update(msg)
+	return m, cmd
+}
+
+func (m *model) createNewChat(name string, projectName string) error {
+	chat := createNewChat(name, projectName)
+
+	// Save the new chat
+	if err := saveChat(chat, m.chatsFolderPath); err != nil {
+		return fmt.Errorf("failed to save new chat: %w", err)
+	}
+
+	// Add to list
+	m.chatList.InsertItem(1, chatItem{chat})
+
+	// Select and load the new chat
+	m.selectedChat = &chat
+	m.conversationHistory = []map[string]string{}
+	m.viewMode = ChatView
 
 	return nil
 }
@@ -372,6 +618,8 @@ func createAgentForm(agent *Agent, modelVersions []string, availableTools []Tool
 				Value(&agent.SelectedTools),
 		),
 	).WithShowHelp(true)
+	form.NextField()
+	form.PrevField()
 
 	return form
 }
@@ -546,6 +794,14 @@ func InitialModel() *model {
 
 	m.updateTextareaIndicatorColor()
 
+	m.chatsFolderPath = "./chats"                 // or your preferred path
+	if err = m.initializeChatList(); err != nil { // Changed := to =
+		log.Printf("Error initializing chat list: %v", err)
+	}
+	m.newChatName = ""
+	m.newProjectName = "" // Initialize new project name field
+	m.newChatForm = createNewChatForm(&m.newChatName, &m.newProjectName)
+
 	return m
 }
 
@@ -598,13 +854,21 @@ func saveChat(chat Chat, folderPath string) error {
 	return nil
 }
 
-func createNewChat(name string) Chat {
+func createNewChat(name string, projectName string) Chat {
 	return Chat{
-		ID:        uuid.New().String(),
-		Name:      name,
-		CreatedAt: time.Now(),
-		Messages:  []map[string]string{},
+		ID:          uuid.New().String(),
+		Name:        name,
+		ProjectName: projectName,
+		CreatedAt:   time.Now(),
+		Messages:    make([]map[string]string, 0), // Initialize with empty slice
 	}
+}
+
+func (m *model) handleChatSelection(chat *Chat) {
+	m.selectedChat = chat
+	m.conversationHistory = chat.Messages
+	m.viewMode = ChatView
+	m.updateViewport()
 }
 
 func saveToolUsages(m *model) error {
@@ -702,6 +966,16 @@ func (m *model) updateTextareaIndicatorColor() {
 
 func (m *model) navigate(direction string) {
 	switch m.viewMode {
+	case ChatListView:
+		if direction == "up" {
+			if m.chatList.Index() > 0 {
+				m.chatList.CursorUp()
+			}
+		} else if direction == "down" {
+			if m.chatList.Index() < len(m.chatList.Items())-1 {
+				m.chatList.CursorDown()
+			}
+		}
 	case ModelView:
 		if direction == "up" {
 			m.modelTable.MoveUp(1)
@@ -738,6 +1012,12 @@ func (m *model) navigate(direction string) {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
+	// Handle chat list view first
+	if m.viewMode == ChatListView {
+		return m.updateChatList(msg)
+	}
+
+	// Handle error messages
 	if m.errorMessage != "" {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
@@ -746,8 +1026,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.errorMessage = ""
 				return m, nil
 			case "r":
-				// Implement retry logic if applicable
-				// For example, you might want to retry fetching models
+				// Retry logic if applicable
 				m.errorMessage = ""
 				return m, fetchModelsCmd()
 			}
@@ -756,6 +1035,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Global key handling
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if keyIsCtrlZ(msg) {
@@ -802,29 +1082,69 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Centralized form handling
 	if m.formActive {
-		updatedForm, formCmd := m.configForm.Update(msg)
-		m.configForm = updatedForm.(*huh.Form)
+		var updatedForm interface{}
+		var formCmd tea.Cmd
 
-		switch m.configForm.State {
-		case huh.StateCompleted:
-			m.formActive = false
-			m.viewMode = ChatView
-			m.textarea.Focus()
-			m.updateViewport()
-			return m, nil
+		switch m.viewMode {
+		case NewChatFormView:
+			updatedForm, formCmd = m.newChatForm.Update(msg)
+			m.newChatForm = updatedForm.(*huh.Form)
+		case AgentFormView:
+			updatedForm, formCmd = m.agentForm.Update(msg)
+			m.agentForm = updatedForm.(*huh.Form)
+		default:
+			updatedForm, formCmd = m.configForm.Update(msg)
+			m.configForm = updatedForm.(*huh.Form)
 		}
 
+		// Handle form completion
+		switch m.viewMode {
+		case NewChatFormView:
+			if m.newChatForm.State == huh.StateCompleted {
+				if m.newChatName == "" {
+					m.errorMessage = "Chat name cannot be empty"
+					m.newChatForm.State = huh.StateNormal
+					return m, nil
+				}
+				if m.newProjectName == "" {
+					m.errorMessage = "Project name cannot be empty"
+					m.newChatForm.State = huh.StateNormal
+					return m, nil
+				}
+
+				// Create new chat with both name and project name
+				err := m.createNewChat(m.newChatName, m.newProjectName)
+				if err != nil {
+					m.errorMessage = fmt.Sprintf("Failed to create new chat: %v", err)
+					return m, nil
+				}
+
+				// Reset form and names for next use
+				m.newChatName = ""
+				m.newProjectName = ""
+				m.newChatForm = createNewChatForm(&m.newChatName, &m.newProjectName)
+
+				// Switch back to ChatView
+				m.viewMode = ChatView
+				m.formActive = false
+				m.updateViewport()
+				return m, nil
+			}
+			// Handle other forms if necessary
+		}
 		return m, formCmd
 	}
 
+	// Handle agent form when active
 	if m.agentFormActive {
 		updatedForm, formCmd := m.agentForm.Update(msg)
 		m.agentForm = updatedForm.(*huh.Form)
 
 		switch m.agentForm.State {
 		case huh.StateCompleted:
-			// Clear existing Tools
+			// Clear existing tools
 			m.currentEditingAgent.Tools = []Tool{}
 
 			// Map selected tool names to Tool structs
@@ -837,7 +1157,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			// Proceed with adding or editing the agent
+			// Add or edit the agent
 			if m.agentAction == "add" {
 				m.agents = append(m.agents, m.currentEditingAgent)
 				log.Printf("Added new agent with role: %s\n", m.currentEditingAgent.Role)
@@ -868,6 +1188,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, formCmd
 	}
 
+	// Handle confirmation form
 	if m.viewMode == ConfirmDelete && m.confirmForm != nil {
 		updatedConfirmForm, confirmCmd := m.confirmForm.Update(msg)
 		m.confirmForm = updatedConfirmForm.(*huh.Form)
@@ -910,6 +1231,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, confirmCmd
 	}
 
+	// Handle other messages and view modes
 	switch msg := msg.(type) {
 	case notifyMsg:
 		m.errorMessage = string(msg)
@@ -936,7 +1258,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.toggleOllamaServe()
 			}
 			return m, nil
-
 		case "m":
 			if m.viewMode == ChatView {
 				m.viewMode = ModelView
@@ -945,7 +1266,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.availableTable.Blur()
 				m.agentsTable.Blur()
 				m.parameterSizesTable.Blur()
-
 				return m, fetchModelsCmd()
 			}
 			return m, nil
@@ -967,6 +1287,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.availableTable.Blur()
 				m.parameterSizesTable.Blur()
 				return m, nil
+			}
+		case "l":
+			if m.viewMode == ChatView {
+				m.viewMode = ChatListView
+				return m, triggerWindowResize(m.width, m.height) // Add this resize trigger
 			}
 		case "a":
 			if m.viewMode == AgentView {
@@ -998,7 +1323,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.agentsTable.Blur()
 				return m, nil
 			}
-
 		case "d":
 			if m.viewMode == AgentView {
 				selectedRow := m.agentsTable.SelectedRow()
@@ -1025,19 +1349,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.modelTable.Blur()
 				return m, nil
 			}
-
 		case "u":
 			if m.viewMode == AgentView {
 				m.moveAgentUp()
 				return m, saveAgentsCmd(m)
 			}
-
 		case "y":
 			if m.viewMode == AgentView {
 				m.moveAgentDown()
 				return m, saveAgentsCmd(m)
 			}
-
 		case "esc":
 			switch m.viewMode {
 			case AgentFormView:
@@ -1070,7 +1391,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textarea.Focus()
 				return m, nil
 			}
-
 		case "enter":
 			return m.handleEnterKey()
 		case "j", "down":
@@ -1097,10 +1417,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case availableModelsMsg:
 		m.availableModels = msg
 		m.populateAvailableModelsTable(msg)
+
 	case modelDeletedMsg:
 		m.viewMode = ModelView
 		m.modelTable.Focus()
 		return m, fetchModelsCmd()
+
 	case modelDownloadedMsg:
 		m.viewMode = ModelView
 		m.modelTable.Focus()
@@ -1108,6 +1430,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.agentsTable.Blur()
 		m.parameterSizesTable.Blur()
 		return m, fetchModelsCmd()
+
 	case agentsMsg:
 		m.agents = msg
 		m.populateAgentsTable()
@@ -1138,6 +1461,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.errorMessage = msg.Error()
 		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.textarea.SetWidth(m.width)
@@ -1151,6 +1475,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.parameterSizesTable.SetHeight(m.height - 4)
 		m.agentsTable.SetWidth(m.width)
 
+		// Update chat list size to use full height
+		if m.viewMode == ChatListView {
+			headerHeight := 2 // Account for header and padding
+			m.chatList.SetSize(msg.Width-2, msg.Height-headerHeight)
+		}
+
 		switch m.viewMode {
 		case AgentView:
 			availableHeight := m.height - 4
@@ -1158,6 +1488,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				availableHeight = 3
 			}
 			m.agentsTable.SetHeight(availableHeight)
+		case ChatListView:
+			return m.updateChatList(msg)
 		default:
 			m.agentsTable.SetHeight(m.height - 4)
 		}
@@ -1173,6 +1505,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ollamaRunning = !m.ollamaRunning
 		m.updateTextareaIndicatorColor()
 		return m, nil
+	}
+
+	// Handle chat list view
+	// Updated code
+	if m.viewMode == ChatListView {
+		return m.updateChatList(msg)
 	}
 
 	return m, cmd
@@ -1475,6 +1813,59 @@ func saveAgentsCmd(m *model) tea.Cmd {
 
 func (m *model) handleEnterKey() (tea.Model, tea.Cmd) {
 	switch m.viewMode {
+	case ChatListView:
+		selectedItem := m.chatList.SelectedItem()
+		if selectedItem == nil {
+			return m, nil
+		}
+
+		if chatItem, ok := selectedItem.(chatItem); ok {
+			if chatItem.chat.Name == "Create New Chat" {
+				m.viewMode = NewChatFormView
+				m.formActive = true
+				m.newChatName = ""
+				m.newProjectName = ""
+				m.newChatForm = createNewChatForm(&m.newChatName, &m.newProjectName)
+				return m, nil
+			}
+
+			// Use the new selection handler
+			m.handleChatSelection(&chatItem.chat)
+			return m, nil
+		}
+
+	case NewChatFormView:
+		if m.newChatForm.State == huh.StateCompleted {
+			if m.newChatName == "" {
+				m.errorMessage = "Chat name cannot be empty"
+				m.newChatForm.State = huh.StateNormal
+				return m, nil
+			}
+			if m.newProjectName == "" {
+				m.errorMessage = "Project name cannot be empty"
+				m.newChatForm.State = huh.StateNormal
+				return m, nil
+			}
+
+			// Create new chat with both name and project name
+			err := m.createNewChat(m.newChatName, m.newProjectName)
+			if err != nil {
+				m.errorMessage = fmt.Sprintf("Failed to create new chat: %v", err)
+				return m, nil
+			}
+
+			// Reset form and fields for next use
+			m.newChatName = ""
+			m.newProjectName = ""
+			m.newChatForm = createNewChatForm(&m.newChatName, &m.newProjectName)
+
+			// Switch back to ChatView
+			m.viewMode = ChatView
+			m.formActive = false
+			m.updateViewport()
+			return m, nil
+		}
+
 	case InsertView:
 		if !m.formActive && !m.agentFormActive {
 			m.currentUserMessage = m.textarea.Value()
@@ -1585,7 +1976,14 @@ func (m model) View() string {
 
 func (m model) ViewWithoutError() string {
 	if m.formActive {
-		return m.configForm.View()
+		switch m.viewMode {
+		case NewChatFormView:
+			return m.newChatForm.View()
+		case AgentFormView:
+			return m.agentForm.View()
+		default:
+			return m.configForm.View()
+		}
 	}
 
 	if m.agentFormActive {
@@ -1597,6 +1995,20 @@ func (m model) ViewWithoutError() string {
 	}
 
 	switch m.viewMode {
+	case ChatListView:
+		header := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(lipgloss.Color("#666666")).
+			Padding(0, 1).
+			MarginBottom(1). // Add margin below header
+			Render("Chat List (Enter to select, / to search, ESC to go back)")
+
+		return fmt.Sprintf("%s\n%s", header, m.chatList.View())
+
+	case NewChatFormView:
+		m.newChatForm = createNewChatForm(&m.newChatName, &m.newProjectName) // Updated function call
+		return m.newChatForm.View()
+
 	case ModelView:
 		var status string
 		if m.ollamaRunning {
@@ -1742,6 +2154,18 @@ func deleteAgentCmd(agentRole string) tea.Cmd {
 	}
 }
 
+func (m *model) saveCurrentChat() error {
+	if m.selectedChat == nil {
+		return fmt.Errorf("no chat selected")
+	}
+
+	// Update the selected chat's messages with the current conversation history
+	m.selectedChat.Messages = m.conversationHistory
+
+	// Save the updated chat to file
+	return saveChat(*m.selectedChat, m.chatsFolderPath)
+}
+
 func sendChatMessage(m *model) tea.Cmd {
 	return func() tea.Msg {
 		if m.currentUserMessage == "" {
@@ -1780,6 +2204,11 @@ func sendChatMessage(m *model) tea.Cmd {
 		m.viewMode = ChatView
 		m.textarea.Blur()
 		m.updateViewport()
+
+		// Save the updated chat
+		if err := m.saveCurrentChat(); err != nil {
+			return errMsg(fmt.Errorf("failed to save chat: %w", err))
+		}
 
 		return responseMsg("Conversation processed successfully.")
 	}
