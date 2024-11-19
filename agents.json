@@ -5,7 +5,7 @@
     "system_prompt": "you are a software engineer, you generate code based on the users inputs and requests, you ALWAYS provide the full code with no further explanation.",
     "use_context": false,
     "context_file_path": "/home/cvberscape/code/agentui/main.go",
-    "use_conversation": true,
+    "use_conversation": false,
     "tokens": "16384"
   },
   {

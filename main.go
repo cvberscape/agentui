@@ -13,11 +13,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -26,7 +28,15 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/google/uuid"
 )
+
+type Chat struct {
+	ID        string              `json:"id"`
+	Name      string              `json:"name"`
+	CreatedAt time.Time           `json:"created_at"`
+	Messages  []map[string]string `json:"messages"`
+}
 
 type (
 	responseMsg        string
@@ -109,6 +119,7 @@ const (
 	ParameterSizesView
 	DownloadingView
 	ConfirmDelete
+	ChatListView // New view for list of chats
 )
 
 const (
@@ -190,6 +201,10 @@ type model struct {
 	availableTools         []Tool
 	toolUsages             []ToolUsage
 	toolUsageFilePath      string
+	chats                  []Chat
+	chatList               list.Model
+	selectedChat           *Chat
+	chatsFolderPath        string
 }
 
 type ChatConfig struct {
@@ -532,6 +547,64 @@ func InitialModel() *model {
 	m.updateTextareaIndicatorColor()
 
 	return m
+}
+
+func loadChats(folderPath string) ([]Chat, error) {
+	// Create chats directory if it doesn't exist
+	if err := os.MkdirAll(folderPath, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create chats directory: %w", err)
+	}
+
+	var chats []Chat
+	files, err := os.ReadDir(folderPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read chats directory: %w", err)
+	}
+
+	for _, file := range files {
+		if !file.IsDir() && strings.HasSuffix(file.Name(), ".json") {
+			data, err := os.ReadFile(filepath.Join(folderPath, file.Name()))
+			if err != nil {
+				continue
+			}
+
+			var chat Chat
+			if err := json.Unmarshal(data, &chat); err != nil {
+				continue
+			}
+			chats = append(chats, chat)
+		}
+	}
+
+	// Sort chats by creation time, newest first
+	sort.Slice(chats, func(i, j int) bool {
+		return chats[i].CreatedAt.After(chats[j].CreatedAt)
+	})
+
+	return chats, nil
+}
+
+func saveChat(chat Chat, folderPath string) error {
+	data, err := json.MarshalIndent(chat, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal chat: %w", err)
+	}
+
+	filename := filepath.Join(folderPath, chat.ID+".json")
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		return fmt.Errorf("failed to write chat file: %w", err)
+	}
+
+	return nil
+}
+
+func createNewChat(name string) Chat {
+	return Chat{
+		ID:        uuid.New().String(),
+		Name:      name,
+		CreatedAt: time.Now(),
+		Messages:  []map[string]string{},
+	}
 }
 
 func saveToolUsages(m *model) error {

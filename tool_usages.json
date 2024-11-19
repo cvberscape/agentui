@@ -1,19 +1,10 @@
 [
   {
-    "timestamp": "2024-11-18T11:49:26.027868892+02:00",
+    "timestamp": "2024-11-19T03:34:53.590085945+02:00",
     "agent_role": "codelinter",
     "tool_name": "check_go_code",
-    "input": "package main\nimport \"fmt\"\n\ntype YourType int\nfunc fizzBuzz(n int) {\n\tfor i := 1; i \u003c= n; i++ {\n\t\tif i % 3 == 0 \u0026\u0026 i % 5 == 0 {\n\t\t\tfmt.Print(\"FizzBuzz \")\n\t\t} else if i % 3 == 0 {\n\t\t\tfmt.Print(\"Fizz \")\n\t\t} else if i % 5 == 0 {\n\t\t\tfmt.Print(\"Buzz \")\n\t\t} else {\n\t\t\tfmt.Print(i, \" \")\n\t\t}\n\t}\n}\n\nfunc main() {\n\tvar n int\n\tfmt.Print(\"Enter a number: \" )\n\tfmt.Scanln(\u0026n)\n\tfizzBuzz(n)\n}",
-    "output": "Formatted code:\n```go\npackage main\n\nimport \"fmt\"\n\ntype YourType int\n\nfunc fizzBuzz(n int) {\n\tfor i := 1; i \u003c= n; i++ {\n\t\tif i%3 == 0 \u0026\u0026 i%5 == 0 {\n\t\t\tfmt.Print(\"FizzBuzz \")\n\t\t} else if i%3 == 0 {\n\t\t\tfmt.Print(\"Fizz \")\n\t\t} else if i%5 == 0 {\n\t\t\tfmt.Print(\"Buzz \")\n\t\t} else {\n\t\t\tfmt.Print(i, \" \")\n\t\t}\n\t}\n}\n\nfunc main() {\n\tvar n int\n\tfmt.Print(\"Enter a number: \")\n\tfmt.Scanln(\u0026n)\n\tfizzBuzz(n)\n}\n\n```\n\nLint issues:\n```\nmain.go:24:12: Error return value of `fmt.Scanln` is not checked (errcheck)\n\tfmt.Scanln(\u0026n)\n\t          ^\n\n```",
-    "success": false,
-    "error_message": "exit status 1"
-  },
-  {
-    "timestamp": "2024-11-18T11:49:54.999437322+02:00",
-    "agent_role": "codelinter",
-    "tool_name": "check_go_code",
-    "input": "package main\nimport \"fmt\"\n\nfunc main() {\n    fmt.Println(\"Hello, World!\")\n}",
-    "output": "Code is properly formatted and passes all lint checks:\n```go\npackage main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello, World!\")\n}\n\n```",
+    "input": "package main\nimport (\n\"fmt\"\n)\nfunc main() {\n\tfor i := 1; i \u003c= 100; i++ {\n\t\tif i % 3 == 0 \u0026\u0026 i % 5 == 0 {\n\t\t\tfmt.Println(\"FizzBuzz\")\n\t\t} else if i % 3 == 0 {\n\t\t\tfmt.Print(\"Fizz\")\n\t\t} else if i % 5 == 0 {\n\t\t\tfmt.Print(\"Buzz\")\n\t\t} else {\n\t\t\tfmt.Print(i)\n\t\t}\n\t}\n}",
+    "output": "Code is properly formatted and passes all lint checks:\n```go\npackage main\n\nimport (\n\t\"fmt\"\n)\n\nfunc main() {\n\tfor i := 1; i \u003c= 100; i++ {\n\t\tif i%3 == 0 \u0026\u0026 i%5 == 0 {\n\t\t\tfmt.Println(\"FizzBuzz\")\n\t\t} else if i%3 == 0 {\n\t\t\tfmt.Print(\"Fizz\")\n\t\t} else if i%5 == 0 {\n\t\t\tfmt.Print(\"Buzz\")\n\t\t} else {\n\t\t\tfmt.Print(i)\n\t\t}\n\t}\n}\n\n```",
     "success": true
   }
 ]
