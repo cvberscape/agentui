@@ -34,7 +34,7 @@ import (
 type Chat struct {
 	ID          string              `json:"id"`
 	Name        string              `json:"name"`
-	ProjectName string              `json:"project_name"` // Added field
+	ProjectName string              `json:"project_name"`
 	CreatedAt   time.Time           `json:"created_at"`
 	Messages    []map[string]string `json:"messages"`
 }
@@ -46,7 +46,6 @@ func (i chatItem) FilterValue() string {
 	return i.chat.Name
 }
 
-// Title returns the chat name for the list item
 func (i chatItem) Title() string {
 	return i.chat.Name
 }
@@ -60,7 +59,6 @@ func (i chatItem) Description() string {
 		len(i.chat.Messages))
 }
 
-// chatDelegate customizes the list item rendering
 type chatDelegate struct {
 	styles struct {
 		normal, selected lipgloss.Style
@@ -148,13 +146,13 @@ const (
 	ParameterSizesView
 	DownloadingView
 	ConfirmDelete
-	ChatListView viewMode = iota // Add this to your existing viewMode constants
+	ChatListView viewMode = iota
 	NewChatFormView
 )
 
 const (
 	defaultSystemPrompt     = "You are an assistant tasked with generating code based on the user's prompt. Use the following context to generate the best solution. Context: {context}"
-	defaultContextFilePath  = "/home/cvberscape/code/agentui/main.go"
+	defaultContextFilePath  = ""
 	defaultTokens           = "16384"
 	defaultModelVersion     = "llama3.1"
 	ollamaAPIURL            = "http://localhost:11434/api"
@@ -261,7 +259,7 @@ func saveAgents(m *model) error {
 		return fmt.Errorf("failed to marshal agents: %w", err)
 	}
 
-	err = ioutil.WriteFile(agentsFilePath, data, 0644)
+	err = os.WriteFile(agentsFilePath, data, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to write agents to file: %w", err)
 	}
@@ -274,7 +272,7 @@ func loadAgents(m *model) error {
 		return nil
 	}
 
-	data, err := ioutil.ReadFile(agentsFilePath)
+	data, err := os.ReadFile(agentsFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to read agents file: %w", err)
 	}
@@ -655,7 +653,7 @@ func setupTextarea() textarea.Model {
 
 func InitialModel() *model {
 	ta := setupTextarea()
-	vp := viewport.New(50, 20)
+	vp := viewport.New(85, 20)
 	renderer, _ := glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
 		glamour.WithWordWrap(vp.Width),
@@ -794,12 +792,12 @@ func InitialModel() *model {
 
 	m.updateTextareaIndicatorColor()
 
-	m.chatsFolderPath = "./chats"                 // or your preferred path
-	if err = m.initializeChatList(); err != nil { // Changed := to =
+	m.chatsFolderPath = "./chats"
+	if err = m.initializeChatList(); err != nil {
 		log.Printf("Error initializing chat list: %v", err)
 	}
 	m.newChatName = ""
-	m.newProjectName = "" // Initialize new project name field
+	m.newProjectName = ""
 	m.newChatForm = createNewChatForm(&m.newChatName, &m.newProjectName)
 
 	return m
@@ -860,7 +858,7 @@ func createNewChat(name string, projectName string) Chat {
 		Name:        name,
 		ProjectName: projectName,
 		CreatedAt:   time.Now(),
-		Messages:    make([]map[string]string, 0), // Initialize with empty slice
+		Messages:    make([]map[string]string, 0),
 	}
 }
 
@@ -869,20 +867,6 @@ func (m *model) handleChatSelection(chat *Chat) {
 	m.conversationHistory = chat.Messages
 	m.viewMode = ChatView
 	m.updateViewport()
-}
-
-func saveToolUsages(m *model) error {
-	data, err := json.MarshalIndent(m.toolUsages, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal tool usages: %w", err)
-	}
-
-	err = ioutil.WriteFile(m.toolUsageFilePath, data, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write tool usages to file: %w", err)
-	}
-
-	return nil
 }
 
 func loadToolUsages(m *model) error {
@@ -1520,13 +1504,14 @@ func processAgentChain(input string, m *model, agent Agent) (string, error) {
 	var contextContent string
 	var err error
 
-	if agent.ContextFilePath != "" && agent.ContextFilePath != "No context file selected" {
+	if agent.UseContext && agent.ContextFilePath != "" && agent.ContextFilePath != "No context file selected" {
 		contextContent, err = loadFileContext(agent.ContextFilePath)
 		if err != nil {
 			return "", fmt.Errorf("failed to load context for agent '%s': %w", agent.Role, err)
 		}
 	}
 
+	// Check if this agent has the code checker tool and if there's code to check
 	hasCodeChecker := false
 	for _, tool := range agent.Tools {
 		if tool.Name == "check_go_code" {
@@ -1534,37 +1519,37 @@ func processAgentChain(input string, m *model, agent Agent) (string, error) {
 			break
 		}
 	}
-
 	codeBlocks := extractCodeBlocks(input)
 	hasCode := len(codeBlocks) > 0
 
-	// Create system prompt based on agent type and context availability
+	// Create system prompt based on agent configuration
 	var systemPrompt string
 	if hasCodeChecker && hasCode {
-		basePrompt := `You are a code review assistant with access to a code checking tool. Follow these steps:
+		systemPrompt = `You are a code review assistant. Your primary task is to analyze and test Go code.
+Follow these steps for each code review:
 
-1. First, analyze any code you receive:
-   - Explain what the code does
-   - Comment on the code structure
-   - Note any potential issues
-   - Suggest possible improvements
+1. Examine the provided code carefully
+2. Use the check_go_code tool to analyze it
+    - you will ALWAYS use this tool on go code
+    - print any errors or warnings you get
+3. Analyze the tool's output thoroughly:
+   - Build errors indicate the code won't compile
+   - Linter warnings suggest potential issues
+   - Pay special attention to type errors and undefined variables
+4. Always provide:
+   - A clear summary of all issues found
+   - Specific suggestions for fixing each problem
+   - Example corrections where appropriate
+5. Even if the code passes checks, consider:
+   - Code organization
+   - Error handling
+   - Best practices
+   - Performance implications
 
-2. Then, use the check_go_code tool to verify the code. When using the tool:
-   - Pass the EXACT code you received, do not modify it
-   - Wait for the tool's results
-   - Analyze any issues found
-
-3. Finally, provide:
-   - Your combined analysis
-   - Specific recommendations
-   - Corrected code if needed
-
-Important: When using check_go_code, pass the exact code as received. Do not create new or different code for the tool check.`
+Important: Always use the check_go_code tool on any Go code you receive. Do not skip this step.`
 
 		if contextContent != "" {
-			systemPrompt = fmt.Sprintf("%s\n\nContext: %s", basePrompt, contextContent)
-		} else {
-			systemPrompt = basePrompt
+			systemPrompt = fmt.Sprintf("%s\n\nContext: %s", systemPrompt, contextContent)
 		}
 	} else {
 		if contextContent != "" {
@@ -1576,28 +1561,28 @@ Important: When using check_go_code, pass the exact code as received. Do not cre
 
 	// Prepare messages for the agent
 	var messages []map[string]string
-
-	// Always start with the system prompt
 	messages = append(messages, map[string]string{
 		"role":    "system",
 		"content": systemPrompt,
 	})
-
-	// Add conversation history if enabled
 	if agent.UseConversation {
 		messages = append(messages, m.conversationHistory...)
 	}
-
-	// Add the current input
 	messages = append(messages, map[string]string{
 		"role":    "user",
 		"content": input,
 	})
 
-	// Prepare tools if agent has them
-	var tools []map[string]interface{}
+	// Prepare the API request
+	payload := map[string]interface{}{
+		"model":    agent.ModelVersion,
+		"messages": messages,
+		"stream":   false,
+	}
+
+	// Add tools if needed
 	if hasCodeChecker && hasCode {
-		tools = []map[string]interface{}{
+		payload["tools"] = []map[string]interface{}{
 			{
 				"type": "function",
 				"function": map[string]interface{}{
@@ -1618,19 +1603,9 @@ Important: When using check_go_code, pass the exact code as received. Do not cre
 		}
 	}
 
-	// Prepare API request
-	payload := map[string]interface{}{
-		"model":    agent.ModelVersion,
-		"messages": messages,
-		"stream":   false,
-	}
-	if len(tools) > 0 {
-		payload["tools"] = tools
-	}
-
 	requestBody, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal request body for agent '%s': %w", agent.Role, err)
+		return "", fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
 	// Send request to Ollama API
@@ -1665,11 +1640,13 @@ Important: When using check_go_code, pass the exact code as received. Do not cre
 	var fullResponse strings.Builder
 	fullResponse.WriteString(fmt.Sprintf("Response from %s:\n\n", agent.Role))
 
-	// Add initial analysis
-	if !strings.Contains(apiResponse.Message.Content, `{"name": "check_go_code"`) {
-		fullResponse.WriteString("Initial Analysis:\n")
-		fullResponse.WriteString(apiResponse.Message.Content)
+	// Only add "Initial Analysis" header when using code checker
+	if hasCodeChecker && hasCode {
+		if !strings.Contains(apiResponse.Message.Content, `{"name": "check_go_code"`) {
+			fullResponse.WriteString("Initial Analysis:\n")
+		}
 	}
+	fullResponse.WriteString(apiResponse.Message.Content)
 
 	// Process tool calls if any
 	if len(apiResponse.Message.ToolCalls) > 0 {
@@ -2252,97 +2229,80 @@ func escapeJSONString(s string) string {
 }
 
 func executeGolangciLint(code string, agentRole string, m *model) (string, error) {
-	// Add package main if not present
 	if !strings.Contains(code, "package ") {
 		code = "package main\n\n" + code
 	}
 
-	// Format the code using go/format
 	formattedBytes, err := format.Source([]byte(code))
 	if err != nil {
-		return fmt.Sprintf("Code formatting error: %v\nOriginal code:\n%s", err, code), fmt.Errorf("code formatting failed: %w", err)
+		return fmt.Sprintf("Code Formatting Error:\n%v\n\nOriginal code:\n```go\n%s\n```",
+			err, code), fmt.Errorf("code formatting failed: %w", err)
 	}
 
 	formattedCode := string(formattedBytes)
 
-	// Write the formatted code to a temporary file
-	tmpFile, err := ioutil.TempFile("", "code_*.go")
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp file: %w", err)
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := tmpFile.WriteString(formattedCode); err != nil {
-		return "", fmt.Errorf("failed to write code to temp file: %w", err)
-	}
-
-	if err := tmpFile.Close(); err != nil {
-		return "", fmt.Errorf("failed to close temp file: %w", err)
-	}
-
-	// Create a temporary directory for the module
+	// Create a temporary project structure
 	tmpDir, err := ioutil.TempDir("", "golint_*")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Initialize a Go module in the temporary directory
 	modInit := exec.Command("go", "mod", "init", "lintcheck")
 	modInit.Dir = tmpDir
-	if err := modInit.Run(); err != nil {
-		return "", fmt.Errorf("failed to initialize Go module: %w", err)
+	if modInitOutput, err := modInit.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("failed to initialize Go module: %v\nOutput: %s", err, string(modInitOutput))
 	}
 
-	// Copy the code file to the module directory
-	destFile := filepath.Join(tmpDir, "main.go")
-	if err := copyFile(tmpFile.Name(), destFile); err != nil {
-		return "", fmt.Errorf("failed to copy file to module directory: %w", err)
+	codeFile := filepath.Join(tmpDir, "main.go")
+	if err := ioutil.WriteFile(codeFile, []byte(formattedCode), 0644); err != nil {
+		return "", fmt.Errorf("failed to write code file: %w", err)
 	}
 
-	// Execute golangci-lint
+	// run golangci-lint
 	cmd := exec.Command("golangci-lint", "run",
 		"--disable-all",
-		"--enable=errcheck",
-		"--enable=gofmt",
 		"--enable=govet",
 		"--enable=staticcheck",
-		"--enable=unused")
+		"--enable=errcheck",
+		"--enable=gosimple",
+		"--enable=ineffassign",
+		"--enable=typecheck",
+		"--max-issues-per-linter=0",
+		"--max-same-issues=0")
 	cmd.Dir = tmpDir
-	output, err := cmd.CombinedOutput()
+	lintOutput, err := cmd.CombinedOutput()
 
-	// Prepare the lint result
-	var lintResult string
-	if err != nil {
-		// If there are lint issues, include both the formatted code and the lint output
-		lintResult = fmt.Sprintf("Formatted code:\n```go\n%s\n```\n\nLint issues:\n```\n%s\n```",
-			formattedCode, string(output))
+	// run go build to catch compilation errors
+	buildCmd := exec.Command("go", "build", "./...")
+	buildCmd.Dir = tmpDir
+	buildOutput, buildErr := buildCmd.CombinedOutput()
+
+	var resultBuilder strings.Builder
+	resultBuilder.WriteString("Code Analysis Results:\n\n")
+
+	resultBuilder.WriteString("Formatted Code:\n```go\n")
+	resultBuilder.WriteString(formattedCode)
+	resultBuilder.WriteString("\n```\n\n")
+
+	if buildErr != nil {
+		resultBuilder.WriteString("Build Errors:\n```\n")
+		resultBuilder.WriteString(string(buildOutput))
+		resultBuilder.WriteString("\n```\n\n")
 	} else {
-		lintResult = fmt.Sprintf("Code is properly formatted and passes all lint checks:\n```go\n%s\n```",
-			formattedCode)
+		resultBuilder.WriteString("Build Status: Success ✓\n\n")
 	}
 
-	// Log tool usage
-	usage := ToolUsage{
-		Timestamp: time.Now(),
-		AgentRole: agentRole,
-		ToolName:  "check_go_code",
-		Input:     code,
-		Output:    lintResult,
-		Success:   err == nil,
-		ErrorMessage: func() string {
-			if err != nil {
-				return err.Error()
-			}
-			return ""
-		}(),
-	}
-	m.toolUsages = append(m.toolUsages, usage)
-	if err := saveToolUsages(m); err != nil {
-		log.Printf("Failed to save tool usage: %v", err)
+	resultBuilder.WriteString("Linter Results:\n")
+	if err != nil && len(lintOutput) > 0 {
+		resultBuilder.WriteString("```\n")
+		resultBuilder.WriteString(string(lintOutput))
+		resultBuilder.WriteString("\n```\n")
+	} else {
+		resultBuilder.WriteString("No linting issues found ✓\n")
 	}
 
-	return lintResult, nil
+	return resultBuilder.String(), nil
 }
 
 // Helper function to copy a file
@@ -2413,11 +2373,10 @@ func processAgent(messages []map[string]string, m *model, agent Agent) (string, 
 		enhancedSystemPrompt := fmt.Sprintf(`%s
 
 You have access to a Go code checking tool. When you receive code, you should:
-1. Analyze the code first
 2. Use the check_go_code tool to verify it
 3. Review the tool's output
 4. Provide your analysis and suggestions based on both your review and the tool's output
-5. If there are issues, provide corrected code
+5. If there are issues, point them out
 
 Context: %s`, agent.SystemPrompt, contextContent)
 
@@ -2816,21 +2775,6 @@ func extractCodeBlocks(input string) []string {
 	return codeBlocks
 }
 
-type AvailableModel struct {
-	Name  string   `json:"name"`
-	Sizes []string `json:"sizes"`
-}
-
-func fetchAvailableModelsCmd() tea.Cmd {
-	return func() tea.Msg {
-		models, err := scrapeOllamaLibrary()
-		if err != nil {
-			return errMsg(err)
-		}
-		return availableModelsMsg(models)
-	}
-}
-
 func fetchModels() ([]OllamaModel, error) {
 	apiURL := ollamaAPIURL + "/tags"
 
@@ -2860,61 +2804,44 @@ func fetchModels() ([]OllamaModel, error) {
 	return response.Models, nil
 }
 
+func fetchAvailableModelsCmd() tea.Cmd {
+	return func() tea.Msg {
+		models, err := scrapeOllamaLibrary()
+		if err != nil {
+			return errMsg(err)
+		}
+		return availableModelsMsg(models)
+	}
+}
+
+// function to scrape ollama library
 func scrapeOllamaLibrary() ([]AvailableModel, error) {
-	inputFilePath := "./code/ollama_models_html.txt"
-	outputFilePath := "./code/ollama_models.json"
+	url := "https://ollama.com/library"
+	response, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve the page: %v", err)
+	}
+	defer response.Body.Close()
 
-	os.MkdirAll("./code/", os.ModePerm)
-
-	var content []byte
-	if _, err := os.Stat(inputFilePath); err == nil {
-		content, err = os.ReadFile(inputFilePath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read input file: %v", err)
-		}
-	} else {
-		url := "https://ollama.com/library"
-		response, err := http.Get(url)
-		if err != nil {
-			return nil, fmt.Errorf("failed to retrieve the page: %v", err)
-		}
-		defer response.Body.Close()
-
-		if response.StatusCode != 200 {
-			return nil, fmt.Errorf("failed to retrieve the page. Status code: %d", response.StatusCode)
-		}
-
-		content, err = io.ReadAll(response.Body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read response body: %v", err)
-		}
-
-		err = os.WriteFile(inputFilePath, content, 0644)
-		if err != nil {
-			return nil, fmt.Errorf("failed to write to input file: %v", err)
-		}
+	if response.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to retrieve the page. Status code: %d", response.StatusCode)
 	}
 
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(content))
+	doc, err := goquery.NewDocumentFromReader(response.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse HTML: %v", err)
 	}
 
 	models := parseContent(doc)
 
-	outputData, err := json.MarshalIndent(models, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal JSON: %v", err)
-	}
-
-	err = os.WriteFile(outputFilePath, outputData, 0644)
-	if err != nil {
-		return nil, fmt.Errorf("failed to write to output file: %v", err)
+	if len(models) == 0 {
+		return nil, fmt.Errorf("no models found in the library")
 	}
 
 	return models, nil
 }
 
+// helper function for scrapeOllamaLibrary
 func parseContent(doc *goquery.Document) []AvailableModel {
 	var models []AvailableModel
 	liElements := doc.Find("li")
@@ -2937,7 +2864,8 @@ func parseContent(doc *goquery.Document) []AvailableModel {
 		sizes := []string{}
 		sizeElements := li.Find("span")
 		sizeElements.Each(func(i int, span *goquery.Selection) {
-			if span.HasClass("inline-flex") && span.HasClass("items-center") && span.HasClass("rounded-md") && span.HasClass("bg-[#ddf4ff]") {
+			if span.HasClass("inline-flex") && span.HasClass("items-center") &&
+				span.HasClass("rounded-md") && span.HasClass("bg-[#ddf4ff]") {
 				sizes = append(sizes, strings.TrimSpace(span.Text()))
 			}
 		})
@@ -2945,10 +2873,17 @@ func parseContent(doc *goquery.Document) []AvailableModel {
 			model.Sizes = sizes
 		}
 
-		models = append(models, model)
+		if model.Name != "" {
+			models = append(models, model)
+		}
 	})
 
 	return models
+}
+
+type AvailableModel struct {
+	Name  string   `json:"name"`
+	Sizes []string `json:"sizes"`
 }
 
 func downloadModelCmd(modelName string) tea.Cmd {
