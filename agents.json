@@ -1,14 +1,5 @@
 [
   {
-    "role": "helper",
-    "model_version": "llama3.1:8b",
-    "system_prompt": "1. You will recieve a request to create a function or an application\n2. You are the first agent in a system of multiple agents\n- The next agent after you is a coder\n- you will break down the prompt you recieve into small coding tasks\n- you will ALWAYS tell the agent to complete all tasks\n- you yourself will NEVER type code or help on installing dependencies i repeat you NEVER output code",
-    "use_context": false,
-    "context_file_path": "",
-    "use_conversation": true,
-    "tokens": ""
-  },
-  {
     "role": "coder",
     "model_version": "qwen2.5-coder:14b",
     "system_prompt": "you are a software developer, you will recieve a broken down list of tasks to complete and turn into code, you only provide working code and no plaintext, your response will be sent to an agent who runs tests on the code",
@@ -19,12 +10,12 @@
   },
   {
     "role": "tester",
-    "model_version": "llama3-groq-tool-use:8b",
+    "model_version": "qwen2.5-coder:14b",
     "system_prompt": "",
     "use_context": false,
     "context_file_path": "",
     "use_conversation": true,
-    "tokens": "16384",
+    "tokens": "",
     "tools": [
       {
         "name": "check_go_code",

@@ -3,11 +3,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"go/format"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/charmbracelet/bubbles/filepicker"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
@@ -29,6 +30,8 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 type Chat struct {
@@ -148,6 +151,7 @@ const (
 	ConfirmDelete
 	ChatListView viewMode = iota
 	NewChatFormView
+	FilePickerView viewMode = iota + 20 // Start from a new number to avoid conflicts
 )
 
 const (
@@ -236,6 +240,8 @@ type model struct {
 	newChatForm            *huh.Form
 	newChatName            string
 	newProjectName         string
+	filePicker             filepicker.Model
+	selectedImage          string
 }
 
 type ChatConfig struct {
@@ -667,6 +673,11 @@ func InitialModel() *model {
 	tableStyle.Header = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF"))
 	tableStyle.Selected = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#00FF00"))
 
+	fp := filepicker.New()
+	fp.CurrentDirectory, _ = os.Getwd()
+	fp.AllowedTypes = []string{".jpg", ".jpeg", ".png", ".gif", ".webp"}
+	fp.Height = 10
+
 	modelColumns := []table.Column{
 		{Title: "Name", Width: 30},
 		{Title: "Parameter Size", Width: 15},
@@ -699,8 +710,8 @@ func InitialModel() *model {
 	)
 
 	agentColumns := []table.Column{
-		{Title: "Role", Width: 30},
-		{Title: "Model Version", Width: 15},
+		{Title: "Role", Width: 20},
+		{Title: "Model Version", Width: 40}, // Increased from 15 to 40
 	}
 
 	agentsTable := table.New(
@@ -748,6 +759,8 @@ func InitialModel() *model {
 		confirmDeleteType:      "",
 		toolUsages:             []ToolUsage{}, // Initialize as empty
 		toolUsageFilePath:      "./tool_usages.json",
+		filePicker:             fp,
+		selectedImage:          "",
 	}
 
 	err := loadAgents(m)
@@ -801,6 +814,32 @@ func InitialModel() *model {
 	m.newChatForm = createNewChatForm(&m.newChatName, &m.newProjectName)
 
 	return m
+}
+
+func (m *model) loadImageAsBase64(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read image: %w", err)
+	}
+
+	// Get file extension
+	ext := strings.ToLower(filepath.Ext(path))
+	var mimeType string
+	switch ext {
+	case ".jpg", ".jpeg":
+		mimeType = "image/jpeg"
+	case ".png":
+		mimeType = "image/png"
+	case ".gif":
+		mimeType = "image/gif"
+	case ".webp":
+		mimeType = "image/webp"
+	default:
+		return "", fmt.Errorf("unsupported image format: %s", ext)
+	}
+
+	base64Data := base64.StdEncoding.EncodeToString(data)
+	return fmt.Sprintf("data:%s;base64,%s", mimeType, base64Data), nil
 }
 
 func loadChats(folderPath string) ([]Chat, error) {
@@ -876,7 +915,7 @@ func loadToolUsages(m *model) error {
 		return nil
 	}
 
-	data, err := ioutil.ReadFile(m.toolUsageFilePath)
+	data, err := os.ReadFile(m.toolUsageFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to read tool usages file: %w", err)
 	}
@@ -1242,6 +1281,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.toggleOllamaServe()
 			}
 			return m, nil
+		case "f":
+			if m.viewMode == ChatView || m.viewMode == InsertView {
+				m.viewMode = FilePickerView
+				return m, nil
+			}
 		case "m":
 			if m.viewMode == ChatView {
 				m.viewMode = ModelView
@@ -1344,6 +1388,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, saveAgentsCmd(m)
 			}
 		case "esc":
+			if m.viewMode == FilePickerView {
+				m.viewMode = ChatView
+				return m, nil
+			}
 			switch m.viewMode {
 			case AgentFormView:
 				m.viewMode = AgentView
@@ -1465,6 +1513,31 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chatList.SetSize(msg.Width-2, msg.Height-headerHeight)
 		}
 
+		if m.viewMode == FilePickerView {
+			var fpCmd tea.Cmd
+			m.filePicker, fpCmd = m.filePicker.Update(msg)
+
+			// Handle file selection
+			if didSelect, path := m.filePicker.DidSelectFile(msg); didSelect {
+				base64Image, err := m.loadImageAsBase64(path)
+				if err != nil {
+					m.errorMessage = fmt.Sprintf("Failed to load image: %v", err)
+				} else {
+					// Add image to conversation
+					m.conversationHistory = append(m.conversationHistory, map[string]string{
+						"role":    "user",
+						"content": fmt.Sprintf("![Selected Image](%s)", base64Image),
+					})
+					m.selectedImage = path
+					m.updateViewport()
+				}
+				m.viewMode = ChatView
+				return m, nil
+			}
+
+			return m, fpCmd
+		}
+
 		switch m.viewMode {
 		case AgentView:
 			availableHeight := m.height - 4
@@ -1528,25 +1601,24 @@ func processAgentChain(input string, m *model, agent Agent) (string, error) {
 		systemPrompt = `You are a code review assistant. Your primary task is to analyze and test Go code.
 Follow these steps for each code review:
 
-1. Examine the provided code carefully
-2. Use the check_go_code tool to analyze it
+1. Use the check_go_code tool to analyze it
     - you will ALWAYS use this tool on go code
     - print any errors or warnings you get
-3. Analyze the tool's output thoroughly:
+2. Analyze the tool's output thoroughly:
    - Build errors indicate the code won't compile
    - Linter warnings suggest potential issues
    - Pay special attention to type errors and undefined variables
-4. Always provide:
+3. Always provide:
    - A clear summary of all issues found
    - Specific suggestions for fixing each problem
    - Example corrections where appropriate
-5. Even if the code passes checks, consider:
+4. Even if the code passes checks, consider:
    - Code organization
    - Error handling
    - Best practices
    - Performance implications
 
-Important: Always use the check_go_code tool on any Go code you receive. Do not skip this step.`
+Important: Always use the check_go_code tool on any Go code you receive. Do not skip this step. Do not alter any code you recieve`
 
 		if contextContent != "" {
 			systemPrompt = fmt.Sprintf("%s\n\nContext: %s", systemPrompt, contextContent)
@@ -1559,25 +1631,40 @@ Important: Always use the check_go_code tool on any Go code you receive. Do not 
 		}
 	}
 
-	// Prepare messages for the agent
 	var messages []map[string]string
+
+	// Add system message
 	messages = append(messages, map[string]string{
 		"role":    "system",
-		"content": systemPrompt,
+		"content": agent.SystemPrompt,
 	})
+
+	// Add conversation history if enabled
 	if agent.UseConversation {
 		messages = append(messages, m.conversationHistory...)
 	}
+
+	// Add the current input
 	messages = append(messages, map[string]string{
 		"role":    "user",
 		"content": input,
 	})
 
-	// Prepare the API request
+	// Prepare the request
 	payload := map[string]interface{}{
 		"model":    agent.ModelVersion,
 		"messages": messages,
 		"stream":   false,
+	}
+
+	// If the model supports multimodal capabilities and there's an image
+	if strings.Contains(agent.ModelVersion, "llava") || strings.Contains(agent.ModelVersion, "bakllava") {
+		for _, msg := range messages {
+			if strings.Contains(msg["content"], "![") && strings.Contains(msg["content"], "](data:image") {
+				payload["model"] = agent.ModelVersion // Ensure using multimodal model
+				break
+			}
+		}
 	}
 
 	// Add tools if needed
@@ -1616,7 +1703,7 @@ Important: Always use the check_go_code tool on any Go code you receive. Do not 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("Ollama API error: %s", string(body))
 	}
 
@@ -1941,6 +2028,12 @@ func (m *model) handleEnterKey() (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
+	if m.viewMode == FilePickerView {
+		return fmt.Sprintf(
+			"Select an image file:\n\n%s\n\n(press esc to cancel)",
+			m.filePicker.View(),
+		)
+	}
 	if m.errorMessage != "" {
 		return fmt.Sprintf(
 			"%s\n\nPress 'r' to retry or any other key to continue.",
@@ -2124,9 +2217,6 @@ func deleteModel(modelName string) error {
 
 func deleteAgentCmd(agentRole string) tea.Cmd {
 	return func() tea.Msg {
-		// TODO Perform deletion logic, e.g., API call or local deletion
-
-		// Here, return a message indicating deletion
 		return agentDeletedMsg{Role: agentRole}
 	}
 }
@@ -2219,15 +2309,6 @@ func parseToolCall(jsonData []byte) (string, error) {
 	return code, nil
 }
 
-func escapeJSONString(s string) string {
-	b, err := json.Marshal(s)
-	if err != nil {
-		return s
-	}
-	// Remove the surrounding quotes that json.Marshal adds
-	return string(b[1 : len(b)-1])
-}
-
 func executeGolangciLint(code string, agentRole string, m *model) (string, error) {
 	if !strings.Contains(code, "package ") {
 		code = "package main\n\n" + code
@@ -2242,7 +2323,7 @@ func executeGolangciLint(code string, agentRole string, m *model) (string, error
 	formattedCode := string(formattedBytes)
 
 	// Create a temporary project structure
-	tmpDir, err := ioutil.TempDir("", "golint_*")
+	tmpDir, err := os.MkdirTemp("", "golint_*")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
@@ -2255,7 +2336,7 @@ func executeGolangciLint(code string, agentRole string, m *model) (string, error
 	}
 
 	codeFile := filepath.Join(tmpDir, "main.go")
-	if err := ioutil.WriteFile(codeFile, []byte(formattedCode), 0644); err != nil {
+	if err := os.WriteFile(codeFile, []byte(formattedCode), 0644); err != nil {
 		return "", fmt.Errorf("failed to write code file: %w", err)
 	}
 
@@ -2305,269 +2386,13 @@ func executeGolangciLint(code string, agentRole string, m *model) (string, error
 	return resultBuilder.String(), nil
 }
 
-// Helper function to copy a file
-func copyFile(src, dst string) error {
-	sourceFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer sourceFile.Close()
-
-	destFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer destFile.Close()
-
-	_, err = io.Copy(destFile, sourceFile)
-	return err
-}
-
-func processAgentsSequentially(m *model, input string, agents []Agent) ([]string, error) {
-	var responses []string
-	currentInput := input
-
-	for _, agent := range agents {
-		response, err := processAgentChain(currentInput, m, agent)
-		if err != nil {
-			log.Printf("Error processing agent '%s': %v\n", agent.Role, err)
-			return responses, err
-		}
-		responses = append(responses, response)
-		currentInput = response
-	}
-
-	return responses, nil
-}
-
-func processAgent(messages []map[string]string, m *model, agent Agent) (string, error) {
-	// First, check if this agent has the code checking tool
-	hasCodeChecker := false
-	for _, tool := range agent.Tools {
-		if tool.Name == "check_go_code" {
-			hasCodeChecker = true
-			break
-		}
-	}
-
-	// Extract code from the last message (either user or another agent)
-	var codeToCheck string
-	var lastMessage string
-	if len(messages) > 0 {
-		lastMessage = messages[len(messages)-1]["content"]
-		// Extract any code blocks from the message
-		codeBlocks := extractCodeBlocks(lastMessage)
-		if len(codeBlocks) > 0 {
-			codeToCheck = strings.Join(codeBlocks, "\n")
-		}
-	}
-
-	// If the agent has the code checker and there's code to check, enhance the prompt
-	if hasCodeChecker && codeToCheck != "" {
-		contextContent, err := loadFileContext(agent.ContextFilePath)
-		if err != nil {
-			return "", fmt.Errorf("failed to load context for agent '%s': %w", agent.Role, err)
-		}
-
-		// Create an enhanced system prompt that includes code checking instructions
-		enhancedSystemPrompt := fmt.Sprintf(`%s
-
-You have access to a Go code checking tool. When you receive code, you should:
-2. Use the check_go_code tool to verify it
-3. Review the tool's output
-4. Provide your analysis and suggestions based on both your review and the tool's output
-5. If there are issues, point them out
-
-Context: %s`, agent.SystemPrompt, contextContent)
-
-		// Prepare the API request with tools
-		payload := map[string]interface{}{
-			"model": agent.ModelVersion,
-			"messages": []map[string]string{
-				{
-					"role":    "system",
-					"content": enhancedSystemPrompt,
-				},
-				{
-					"role":    "user",
-					"content": lastMessage,
-				},
-			},
-			"stream": false,
-			"tools": []map[string]interface{}{
-				{
-					"type": "function",
-					"function": map[string]interface{}{
-						"name":        "check_go_code",
-						"description": "Check Go code for errors and style issues using golint.",
-						"parameters": map[string]interface{}{
-							"type": "object",
-							"properties": map[string]interface{}{
-								"code": map[string]interface{}{
-									"type":        "string",
-									"description": "The Go code to check for errors.",
-								},
-							},
-							"required": []string{"code"},
-						},
-					},
-				},
-			},
-		}
-
-		requestBody, err := json.Marshal(payload)
-		if err != nil {
-			return "", fmt.Errorf("failed to marshal request body: %w", err)
-		}
-
-		// Send request to Ollama API
-		resp, err := http.Post(ollamaAPIURL+"/chat", "application/json", bytes.NewBuffer(requestBody))
-		if err != nil {
-			return "", fmt.Errorf("failed to send request to Ollama API: %w", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := ioutil.ReadAll(resp.Body)
-			return "", fmt.Errorf("Ollama API error: %s", string(body))
-		}
-
-		var apiResponse struct {
-			Message struct {
-				Role      string `json:"role"`
-				Content   string `json:"content"`
-				ToolCalls []struct {
-					Function struct {
-						Name      string          `json:"name"`
-						Arguments json.RawMessage `json:"arguments"`
-					} `json:"function"`
-				} `json:"tool_calls"`
-			} `json:"message"`
-		}
-
-		if err := json.NewDecoder(resp.Body).Decode(&apiResponse); err != nil {
-			return "", fmt.Errorf("failed to decode Ollama API response: %w", err)
-		}
-
-		// Handle tool calls and build response
-		var fullResponse strings.Builder
-		fullResponse.WriteString(apiResponse.Message.Content)
-
-		for _, toolCall := range apiResponse.Message.ToolCalls {
-			if toolCall.Function.Name == "check_go_code" {
-				toolCallJSON := map[string]interface{}{
-					"name":       toolCall.Function.Name,
-					"parameters": json.RawMessage(toolCall.Function.Arguments),
-				}
-
-				toolCallData, err := json.Marshal(toolCallJSON)
-				if err != nil {
-					return "", fmt.Errorf("failed to marshal tool call: %w", err)
-				}
-
-				code, err := parseToolCall(toolCallData)
-				if err != nil {
-					return "", fmt.Errorf("failed to parse tool call: %w", err)
-				}
-
-				lintResult, err := executeGolangciLint(code, agent.Role, m)
-				if err != nil {
-					fullResponse.WriteString("\n\nLint Check Result:\n" + lintResult)
-				} else {
-					fullResponse.WriteString("\n\nLint Check Result:\n" + lintResult)
-				}
-			}
-		}
-
-		return fullResponse.String(), nil
-	}
-
-	// If no code checker or no code to check, process normally
-	return dynamicAgentBehavior(messages, m, agent)
-}
-
-func dynamicAgentBehavior(messages []map[string]string, m *model, agent Agent) (string, error) {
-	contextContent, err := loadFileContext(agent.ContextFilePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to load context for agent '%s': %w", agent.Role, err)
-	}
-
-	systemPrompt := strings.ReplaceAll(agent.SystemPrompt, "{context}", contextContent)
-
-	systemMessage := map[string]string{
-		"role":    "system",
-		"content": systemPrompt,
-	}
-	messagesWithSystem := append([]map[string]string{systemMessage}, messages...)
-
-	numCtx, err := strconv.Atoi(agent.Tokens)
-	if err != nil || numCtx <= 0 {
-		numCtx = 16384
-	}
-
-	options := map[string]interface{}{
-		"num_ctx": numCtx,
-	}
-
-	requestBody, err := json.Marshal(map[string]interface{}{
-		"model":    agent.ModelVersion,
-		"messages": messagesWithSystem,
-		"stream":   false,
-		"options":  options,
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal request body for agent '%s': %w", agent.Role, err)
-	}
-
-	req, err := http.NewRequest("POST", ollamaAPIURL+"/chat", bytes.NewBuffer(requestBody))
-	if err != nil {
-		return "", fmt.Errorf("failed to create HTTP request for agent '%s': %w", agent.Role, err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("request failed for agent '%s': %w", agent.Role, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("error from Ollama API for agent '%s': %v", agent.Role, resp.Status)
-	}
-
-	var rawResponse map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&rawResponse); err != nil {
-		return "", fmt.Errorf("failed to decode response for agent '%s': %w", agent.Role, err)
-	}
-
-	if message, ok := rawResponse["message"].(map[string]interface{}); ok {
-		if content, ok := message["content"].(string); ok {
-			return content, nil
-		}
-	}
-
-	return "", fmt.Errorf("unexpected response format or empty response for agent '%s': %+v", agent.Role, rawResponse)
-}
-
-func messagesForAgent(m *model, agent Agent) []map[string]string {
-	messages := make([]map[string]string, len(m.conversationHistory))
-	copy(messages, m.conversationHistory)
-
-	systemMessage := map[string]string{
-		"role":    "system",
-		"content": agent.SystemPrompt,
-	}
-
-	messages = append([]map[string]string{systemMessage}, messages...)
-
-	return messages
-}
-
 func (m *model) updateViewport() {
 	var conversation strings.Builder
+	titleCaser := cases.Title(language.English) // Create a Title caser once
+
 	for _, msg := range m.conversationHistory {
-		role := strings.Title(msg["role"])
+		// Instead of strings.Title, use the Title caser
+		role := titleCaser.String(msg["role"])
 		content := msg["content"]
 
 		switch strings.ToLower(role) {
@@ -2660,87 +2485,6 @@ func requestOllama(messages []map[string]string, agent Agent) (string, error) {
 func FormatSizeGB(size int64) string {
 	gb := float64(size) / (1024 * 1024 * 1024)
 	return fmt.Sprintf("%.1f GB", gb)
-}
-
-func retrieveRelevantSections(query, filePath string) (string, error) {
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read file %s: %w", filePath, err)
-	}
-
-	var relevantSections strings.Builder
-	lines := strings.Split(string(content), "\n")
-	for _, line := range lines {
-		if strings.Contains(line, query) {
-			relevantSections.WriteString(line + "\n")
-		}
-	}
-
-	return relevantSections.String(), nil
-}
-
-func generateCode(messages []map[string]string, m *model, agent Agent) (string, error) {
-	contextBytes, err := os.ReadFile(agent.ContextFilePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read context file: %w", err)
-	}
-	context := string(contextBytes)
-
-	systemPrompt := strings.ReplaceAll(agent.SystemPrompt, "{context}", context)
-
-	systemMessage := map[string]string{
-		"role":    "system",
-		"content": systemPrompt,
-	}
-	messagesWithSystem := append([]map[string]string{systemMessage}, messages...)
-
-	response, err := requestOllama(messagesWithSystem, agent)
-	if err != nil {
-		return "", err
-	}
-
-	if strings.Contains(response, "func ") || strings.Contains(response, "package ") {
-		formattedResponse := fmt.Sprintf("```go\n%s\n```", response)
-		return formattedResponse, nil
-	}
-
-	return response, nil
-}
-
-func testCode(messages []map[string]string, m *model, agent Agent) (string, error) {
-	assistantCode := ""
-	for i := len(messages) - 1; i >= 0; i-- {
-		if strings.ToLower(messages[i]["role"]) == "assistant" {
-			assistantCode = messages[i]["content"]
-			break
-		}
-	}
-
-	if assistantCode == "" {
-		return "No code for agent to test.", nil
-	}
-
-	codeBlocks := extractCodeBlocks(assistantCode)
-	if len(codeBlocks) == 0 {
-		return "No code for agent to test.", nil
-	}
-
-	codeToTest := strings.Join(codeBlocks, "\n")
-
-	systemPrompt := "You are a code tester tasked with reviewing the following code for potential bugs or issues. Identify and highlight any issues or improvements needed."
-
-	messagesForTester := []map[string]string{
-		{
-			"role":    "system",
-			"content": systemPrompt,
-		},
-		{
-			"role":    "user",
-			"content": codeToTest,
-		},
-	}
-
-	return requestOllama(messagesForTester, agent)
 }
 
 func extractCodeBlocks(input string) []string {
@@ -2895,15 +2639,6 @@ func downloadModelCmd(modelName string) tea.Cmd {
 		}
 		return modelDownloadedMsg(modelName)
 	}
-}
-
-func ValidateAgentRole(m *model, newRole string, originalRole string) error {
-	for _, agent := range m.agents {
-		if strings.EqualFold(agent.Role, newRole) && !strings.EqualFold(agent.Role, originalRole) {
-			return fmt.Errorf("agent role '%s' already exists", newRole)
-		}
-	}
-	return nil
 }
 
 func keyIsCtrlZ(msg tea.KeyMsg) bool {
