@@ -312,7 +312,7 @@ func newChatDelegate() chatDelegate {
 }
 
 func (d chatDelegate) Height() int {
-	return 3 // Changed from 3 to 2: one line for title, one for description
+	return 3
 }
 
 func (d chatDelegate) Spacing() int {
@@ -892,12 +892,17 @@ func (m *model) populateAgentsTable() {
 	}
 }
 
+type initialTransitionMsg struct{}
+
 func (m *model) Init() tea.Cmd {
 	return tea.Batch(
 		textarea.Blink,
 		tea.EnterAltScreen,
 		fetchModelsCmd(),
 		m.spinner.Tick,
+		func() tea.Msg {
+			return initialTransitionMsg{}
+		},
 	)
 }
 
@@ -1025,6 +1030,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// global key handling (esc/ctrl+z)
 	switch msg := msg.(type) {
+	case initialTransitionMsg:
+		m.viewMode = ChatListView
+		return m, triggerWindowResize(m.width, m.height)
+
 	case tea.KeyMsg:
 		if keyIsCtrlZ(msg) {
 			return m, tea.Quit
