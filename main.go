@@ -151,7 +151,7 @@ const (
 	ConfirmDelete
 	ChatListView viewMode = iota
 	NewChatFormView
-	FilePickerView viewMode = iota + 20 // Start from a new number to avoid conflicts
+	FilePickerView viewMode = iota + 20
 )
 
 const (
@@ -165,7 +165,7 @@ const (
 	agentFormTitle          = "Agent Configuration"
 	confirmDeleteAgentTitle = "Confirm Agent Deletion"
 	confirmDeleteModelTitle = "Confirm Model Deletion"
-	agentsFilePath          = "./agents.json" // Path to the agents JSON file
+	agentsFilePath          = "./agents.json"
 )
 
 var (
@@ -300,53 +300,45 @@ func newChatDelegate() chatDelegate {
 	d.styles.normal = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#FFFFFF")).
 		Padding(0, 0, 0, 2).
-		MarginBottom(1) // Add consistent bottom margin
+		MarginBottom(1)
 
 	d.styles.selected = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#000000")).
 		Background(lipgloss.Color("#00FF00")).
 		Padding(0, 0, 0, 2).
-		MarginBottom(1) // Add consistent bottom margin
+		MarginBottom(1)
 
 	return d
 }
 
-// Height returns the fixed height for each list item
 func (d chatDelegate) Height() int {
 	return 3 // Changed from 3 to 2: one line for title, one for description
 }
 
-// Spacing returns zero to let the styles handle spacing
 func (d chatDelegate) Spacing() int {
 	return 0
 }
 
-// Update implements list.ItemDelegate
 func (d chatDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd {
 	return nil
 }
 
-// Render implements list.ItemDelegate
 func (d chatDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
 	i, ok := listItem.(chatItem)
 	if !ok {
 		return
 	}
 
-	// Create the display strings
 	title := i.Title()
 	desc := i.Description()
 
-	// Build the final string with exactly two lines
 	str := fmt.Sprintf("%s\n%s", title, desc)
 
-	// Apply the appropriate style
 	fn := d.styles.normal.Render
 	if index == m.Index() {
 		fn = d.styles.selected.Render
 	}
 
-	// Write the styled string
 	fmt.Fprint(w, fn(str))
 }
 
@@ -387,20 +379,17 @@ func createNewChatForm(name *string, projectName *string) *huh.Form {
 	return form
 }
 
-// Initialize chat list component
 func (m *model) initializeChatList() error {
 	// Create chats directory if it doesn't exist
 	if err := os.MkdirAll(m.chatsFolderPath, 0755); err != nil {
 		return fmt.Errorf("failed to create chats directory: %w", err)
 	}
 
-	// Load existing chats
 	chats, err := loadChats(m.chatsFolderPath)
 	if err != nil {
 		return fmt.Errorf("failed to load chats: %w", err)
 	}
 
-	// Convert chats to list items
 	items := make([]list.Item, 0, len(chats)+1)
 	items = append(items, chatItem{Chat{Name: "Create New Chat", ProjectName: ""}})
 	for _, chat := range chats {
@@ -408,7 +397,7 @@ func (m *model) initializeChatList() error {
 	}
 
 	delegate := newChatDelegate()
-	m.chatList = list.New(items, delegate, m.width, m.height-4) // Set initial size using full height
+	m.chatList = list.New(items, delegate, m.width, m.height-4)
 	m.chatList.Title = "Chat List"
 	m.chatList.SetShowStatusBar(false)
 	m.chatList.SetFilteringEnabled(true)
@@ -417,9 +406,8 @@ func (m *model) initializeChatList() error {
 		Background(lipgloss.Color("#666666")).
 		Padding(0, 1)
 
-	// Set additional styles for better visibility
 	m.chatList.Styles.NoItems = lipgloss.NewStyle().Margin(1, 2)
-	m.chatList.SetSize(m.width, m.height-4) // Set size again to ensure proper layout
+	m.chatList.SetSize(m.width, m.height-4)
 
 	return nil
 }
@@ -433,13 +421,12 @@ func triggerWindowResize(width, height int) tea.Cmd {
 	}
 }
 
-// Update the model to handle chat list interactions
 func (m *model) updateChatList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		headerHeight := 3 // Account for header and padding
+		headerHeight := 3
 		m.chatList.SetSize(msg.Width-2, msg.Height-headerHeight)
 		return m, nil
 
@@ -473,7 +460,6 @@ func (m *model) updateChatList(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 
-				// Load and switch to the selected chat
 				m.selectedChat = &chatItem.chat
 				m.conversationHistory = chatItem.chat.Messages
 				m.viewMode = ChatView
@@ -483,7 +469,6 @@ func (m *model) updateChatList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// For other messages, pass them to the chatList's update function
 	m.chatList, cmd = m.chatList.Update(msg)
 	return m, cmd
 }
@@ -491,50 +476,17 @@ func (m *model) updateChatList(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) createNewChat(name string, projectName string) error {
 	chat := createNewChat(name, projectName)
 
-	// Save the new chat
 	if err := saveChat(chat, m.chatsFolderPath); err != nil {
 		return fmt.Errorf("failed to save new chat: %w", err)
 	}
 
-	// Add to list
 	m.chatList.InsertItem(1, chatItem{chat})
 
-	// Select and load the new chat
 	m.selectedChat = &chat
 	m.conversationHistory = []map[string]string{}
 	m.viewMode = ChatView
 
 	return nil
-}
-
-// TODO REMOVE
-func createConfigForm(config *ChatConfig, modelVersions []string) *huh.Form {
-	modelOptions := make([]huh.Option[string], 0, len(modelVersions))
-	for _, mv := range modelVersions {
-		modelOptions = append(modelOptions, huh.NewOption(mv, mv))
-	}
-
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Model Version").
-				Options(modelOptions...).
-				Value(&config.ModelVersion),
-
-			huh.NewInput().
-				Title("System Prompt").
-				Value(&config.SystemPrompt),
-
-			huh.NewInput().
-				Title("Context File Path").
-				Value(&config.ContextFilePath),
-
-			huh.NewInput().
-				Title("Input Tokens").
-				Value(&config.Tokens),
-		),
-	).WithShowHelp(true)
-	return form
 }
 
 func createAgentForm(agent *Agent, modelVersions []string, availableTools []Tool) *huh.Form {
@@ -686,7 +638,7 @@ func InitialModel() *model {
 
 	modelTable := table.New(
 		table.WithColumns(modelColumns),
-		table.WithFocused(false), // Initially unfocused
+		table.WithFocused(false),
 		table.WithStyles(tableStyle),
 	)
 
@@ -697,7 +649,7 @@ func InitialModel() *model {
 
 	availableTable := table.New(
 		table.WithColumns(availableColumns),
-		table.WithFocused(false), // Initially unfocused
+		table.WithFocused(false),
 		table.WithStyles(tableStyle),
 	)
 
@@ -711,7 +663,7 @@ func InitialModel() *model {
 
 	agentColumns := []table.Column{
 		{Title: "Role", Width: 20},
-		{Title: "Model Version", Width: 40}, // Increased from 15 to 40
+		{Title: "Model Version", Width: 40},
 	}
 
 	agentsTable := table.New(
@@ -720,13 +672,10 @@ func InitialModel() *model {
 		table.WithStyles(tableStyle),
 	)
 
-	// Define available tools
 	availableTools := []Tool{
 		checkGoCodeTool,
-		// Add more tools here if needed
 	}
 
-	// Assign availableTools to the model's field
 	m := &model{
 		userMessages:        make([]string, 0),
 		assistantResponses:  make([]string, 0),
@@ -752,12 +701,12 @@ func InitialModel() *model {
 		agentsTable:            agentsTable,
 		agentViewMode:          ChatView,
 		agentFormActive:        false,
-		availableTools:         availableTools, // Assigned here
+		availableTools:         availableTools,
 		availableModelVersions: []string{},
 		modelsFetchError:       nil,
 		errorMessage:           "",
 		confirmDeleteType:      "",
-		toolUsages:             []ToolUsage{}, // Initialize as empty
+		toolUsages:             []ToolUsage{},
 		toolUsageFilePath:      "./tool_usages.json",
 		filePicker:             fp,
 		selectedImage:          "",
@@ -772,7 +721,7 @@ func InitialModel() *model {
 			SystemPrompt:    "You are an assistant tasked with generating code based on the user's prompt.",
 			UseContext:      false,
 			ContextFilePath: "",
-			UseConversation: false, // Default to not using conversation history
+			UseConversation: false,
 			Tokens:          "16384",
 		}, Agent{
 			Role:            "Tester",
@@ -780,7 +729,7 @@ func InitialModel() *model {
 			SystemPrompt:    "You are a code tester tasked with reviewing the following code for potential bugs or issues.",
 			UseContext:      false,
 			ContextFilePath: "",
-			UseConversation: true, // Example of enabling conversation history by default
+			UseConversation: true,
 			Tokens:          "16384",
 		})
 
@@ -796,12 +745,9 @@ func InitialModel() *model {
 
 	m.populateAgentsTable()
 
-	// Pass m.availableTools to createAgentForm
 	m.agentForm = createAgentForm(&m.currentEditingAgent, m.availableModelVersions, m.availableTools)
 
 	m.availableModelVersions = []string{defaultModelVersion}
-
-	m.configForm = createConfigForm(&m.config, m.availableModelVersions)
 
 	m.updateTextareaIndicatorColor()
 
@@ -816,13 +762,13 @@ func InitialModel() *model {
 	return m
 }
 
+// WIP: image inputs for mm models
 func (m *model) loadImageAsBase64(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("failed to read image: %w", err)
 	}
 
-	// Get file extension
 	ext := strings.ToLower(filepath.Ext(path))
 	var mimeType string
 	switch ext {
@@ -843,7 +789,6 @@ func (m *model) loadImageAsBase64(path string) (string, error) {
 }
 
 func loadChats(folderPath string) ([]Chat, error) {
-	// Create chats directory if it doesn't exist
 	if err := os.MkdirAll(folderPath, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create chats directory: %w", err)
 	}
@@ -869,7 +814,6 @@ func loadChats(folderPath string) ([]Chat, error) {
 		}
 	}
 
-	// Sort chats by creation time, newest first
 	sort.Slice(chats, func(i, j int) bool {
 		return chats[i].CreatedAt.After(chats[j].CreatedAt)
 	})
@@ -910,7 +854,6 @@ func (m *model) handleChatSelection(chat *Chat) {
 
 func loadToolUsages(m *model) error {
 	if _, err := os.Stat(m.toolUsageFilePath); os.IsNotExist(err) {
-		// File does not exist; initialize with empty slice
 		m.toolUsages = []ToolUsage{}
 		return nil
 	}
@@ -1035,23 +978,18 @@ func (m *model) navigate(direction string) {
 func (m *model) refreshModelView() tea.Cmd {
 	return tea.Sequence(
 		func() tea.Msg {
-			// Store current cursor position if there's a selection
 			currentCursor := m.modelTable.Cursor()
 
-			// Fetch new models and update table
 			models, err := fetchModels()
 			if err != nil {
 				return errMsg(err)
 			}
 
-			// Update the table
 			m.populateModelTable(models)
 
-			// Restore cursor position if it's valid
 			if currentCursor < len(m.modelTable.Rows()) {
 				m.modelTable.SetCursor(currentCursor)
 			} else {
-				// If the current cursor would be out of bounds, set it to the last row
 				if len(m.modelTable.Rows()) > 0 {
 					m.modelTable.SetCursor(len(m.modelTable.Rows()) - 1)
 				}
@@ -1065,12 +1003,10 @@ func (m *model) refreshModelView() tea.Cmd {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
-	// Handle chat list view first
 	if m.viewMode == ChatListView {
 		return m.updateChatList(msg)
 	}
 
-	// Handle error messages
 	if m.errorMessage != "" {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
@@ -1079,7 +1015,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.errorMessage = ""
 				return m, nil
 			case "r":
-				// Retry logic if applicable
 				m.errorMessage = ""
 				return m, fetchModelsCmd()
 			}
@@ -1088,7 +1023,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Global key handling
+	// global key handling (esc/ctrl+z)
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if keyIsCtrlZ(msg) {
@@ -1137,7 +1072,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Centralized form handling
 	if m.formActive {
 		var updatedForm interface{}
 		var formCmd tea.Cmd
@@ -1154,7 +1088,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.configForm = updatedForm.(*huh.Form)
 		}
 
-		// Handle form completion
 		switch m.viewMode {
 		case NewChatFormView:
 			if m.newChatForm.State == huh.StateCompleted {
@@ -1169,40 +1102,33 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 
-				// Create new chat with both name and project name
 				err := m.createNewChat(m.newChatName, m.newProjectName)
 				if err != nil {
 					m.errorMessage = fmt.Sprintf("Failed to create new chat: %v", err)
 					return m, nil
 				}
 
-				// Reset form and names for next use
 				m.newChatName = ""
 				m.newProjectName = ""
 				m.newChatForm = createNewChatForm(&m.newChatName, &m.newProjectName)
 
-				// Switch back to ChatView
 				m.viewMode = ChatView
 				m.formActive = false
 				m.updateViewport()
 				return m, nil
 			}
-			// Handle other forms if necessary
 		}
 		return m, formCmd
 	}
 
-	// Handle agent form when active
 	if m.agentFormActive {
 		updatedForm, formCmd := m.agentForm.Update(msg)
 		m.agentForm = updatedForm.(*huh.Form)
 
 		switch m.agentForm.State {
 		case huh.StateCompleted:
-			// Clear existing tools
 			m.currentEditingAgent.Tools = []Tool{}
 
-			// Map selected tool names to Tool structs
 			for _, toolName := range m.currentEditingAgent.SelectedTools {
 				for _, availableTool := range m.availableTools {
 					if availableTool.Name == toolName {
@@ -1212,7 +1138,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			// Add or edit the agent
 			if m.agentAction == "add" {
 				m.agents = append(m.agents, m.currentEditingAgent)
 				log.Printf("Added new agent with role: %s\n", m.currentEditingAgent.Role)
@@ -1243,19 +1168,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, formCmd
 	}
 
-	// Handle confirmation form
 	if m.viewMode == ConfirmDelete && m.confirmForm != nil {
 		updatedConfirmForm, confirmCmd := m.confirmForm.Update(msg)
 		m.confirmForm = updatedConfirmForm.(*huh.Form)
 
 		switch m.confirmForm.State {
 		case huh.StateCompleted:
-			// We determine what to do after confirmation finishes
-			m.viewMode = ModelView // Always return to ModelView after finishing confirm
+			m.viewMode = ModelView
 			if m.confirmResult {
-				// User chose "Yes"
 				if m.confirmDeleteType == "model" {
-					// Delete the model, then fully re-enter model view (like pressing 'm')
 					return m, tea.Sequence(
 						deleteModelCmd(m.confirmDeleteModelName),
 						func() tea.Msg {
@@ -1263,19 +1184,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.agentToDelete = ""
 							m.confirmDeleteType = ""
 							m.confirmForm = nil
-							// Focus table to simulate the exact logic as pressing 'm'
 							m.modelTable.Focus()
 							return nil
 						},
 						func() tea.Msg {
-							// Fetch models
 							models, err := fetchModels()
 							if err != nil {
 								return errMsg(err)
 							}
 							m.populateModelTable(models)
 
-							// Now act like pressing 'm' from chatview:
 							m.viewMode = ModelView
 							m.modelTable.Focus()
 							m.textarea.Blur()
@@ -1288,9 +1206,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					)
 				}
 			} else {
-				// User chose "No"
 				if m.confirmDeleteType == "model" {
-					// Do not delete, but still fully re-enter the model view just like pressing 'm'
 					return m, tea.Sequence(
 						func() tea.Msg {
 							m.confirmDeleteModelName = ""
@@ -1301,7 +1217,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							return nil
 						},
 						func() tea.Msg {
-							// Re-fetch models to fully re-enter model view
 							models, err := fetchModels()
 							if err != nil {
 								return errMsg(err)
@@ -1313,19 +1228,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			// Default case: if it's not a model or no special action needed
 			m.confirmDeleteModelName = ""
 			m.agentToDelete = ""
 			m.confirmDeleteType = ""
 			m.confirmForm = nil
-			// Return to model view as a fallback
 			m.modelTable.Focus()
 			return m, nil
 		}
 		return m, confirmCmd
 	}
 
-	// Handle other messages and view modes
 	switch msg := msg.(type) {
 	case notifyMsg:
 		m.errorMessage = string(msg)
@@ -1390,7 +1302,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "l":
 			if m.viewMode == ChatView {
 				m.viewMode = ChatListView
-				return m, triggerWindowResize(m.width, m.height) // Add this resize trigger
+				return m, triggerWindowResize(m.width, m.height)
 			}
 		case "a":
 			if m.viewMode == AgentView {
@@ -1561,23 +1473,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.parameterSizesTable.SetHeight(m.height - 4)
 		m.agentsTable.SetWidth(m.width)
 
-		// Update chat list size to use full height
 		if m.viewMode == ChatListView {
 			headerHeight := 2 // Account for header and padding
 			m.chatList.SetSize(msg.Width-2, msg.Height-headerHeight)
 		}
 
+		// WIP: file picker for mm inputs
 		if m.viewMode == FilePickerView {
 			var fpCmd tea.Cmd
 			m.filePicker, fpCmd = m.filePicker.Update(msg)
 
-			// Handle file selection
 			if didSelect, path := m.filePicker.DidSelectFile(msg); didSelect {
 				base64Image, err := m.loadImageAsBase64(path)
 				if err != nil {
 					m.errorMessage = fmt.Sprintf("Failed to load image: %v", err)
 				} else {
-					// Add image to conversation
 					m.conversationHistory = append(m.conversationHistory, map[string]string{
 						"role":    "user",
 						"content": fmt.Sprintf("![Selected Image](%s)", base64Image),
@@ -1618,8 +1528,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Handle chat list view
-	// Updated code
 	if m.viewMode == ChatListView {
 		return m.updateChatList(msg)
 	}
@@ -1638,7 +1546,6 @@ func processAgentChain(input string, m *model, agent Agent) (string, error) {
 		}
 	}
 
-	// Check if this agent has the code checker tool and if there's code to check
 	hasCodeChecker := false
 	for _, tool := range agent.Tools {
 		if tool.Name == "check_go_code" {
@@ -1649,7 +1556,7 @@ func processAgentChain(input string, m *model, agent Agent) (string, error) {
 	codeBlocks := extractCodeBlocks(input)
 	hasCode := len(codeBlocks) > 0
 
-	// Create system prompt based on agent configuration
+	// if an agent is given golinter tool and go code is detected, system prompt is overridden
 	var systemPrompt string
 	if hasCodeChecker && hasCode {
 		systemPrompt = `You are a code review assistant. Your primary task is to analyze and test Go code.
@@ -1687,31 +1594,27 @@ Important: Always use the check_go_code tool on any Go code you receive. Do not 
 
 	var messages []map[string]string
 
-	// Add system message
 	messages = append(messages, map[string]string{
 		"role":    "system",
 		"content": agent.SystemPrompt,
 	})
 
-	// Add conversation history if enabled
 	if agent.UseConversation {
 		messages = append(messages, m.conversationHistory...)
 	}
 
-	// Add the current input
 	messages = append(messages, map[string]string{
 		"role":    "user",
 		"content": input,
 	})
 
-	// Prepare the request
 	payload := map[string]interface{}{
 		"model":    agent.ModelVersion,
 		"messages": messages,
 		"stream":   false,
 	}
 
-	// If the model supports multimodal capabilities and there's an image
+	// mm support
 	if strings.Contains(agent.ModelVersion, "llava") || strings.Contains(agent.ModelVersion, "bakllava") {
 		for _, msg := range messages {
 			if strings.Contains(msg["content"], "![") && strings.Contains(msg["content"], "](data:image") {
@@ -2119,7 +2022,7 @@ func (m model) ViewWithoutError() string {
 		return fmt.Sprintf("%s\n%s", header, m.chatList.View())
 
 	case NewChatFormView:
-		m.newChatForm = createNewChatForm(&m.newChatName, &m.newProjectName) // Updated function call
+		m.newChatForm = createNewChatForm(&m.newChatName, &m.newProjectName)
 		return m.newChatForm.View()
 
 	case ModelView:
@@ -2179,10 +2082,8 @@ func fetchModelsCmd() tea.Cmd {
 func (m *model) populateModelTable(models []OllamaModel) {
 	var rows []table.Row
 
-	// Always start with Add New Model row
 	rows = append(rows, table.Row{"Add New Model", "N/A", "N/A"})
 
-	// Sort the models to ensure consistent ordering
 	sort.Slice(models, func(i, j int) bool {
 		return models[i].Name < models[j].Name
 	})
@@ -2195,14 +2096,12 @@ func (m *model) populateModelTable(models []OllamaModel) {
 		})
 	}
 
-	// Update table columns to ensure proper width
 	m.modelTable.SetColumns([]table.Column{
 		{Title: "Name", Width: 30},
 		{Title: "Parameter Size", Width: 15},
 		{Title: "Size (GB)", Width: 10},
 	})
 
-	// Set rows and ensure cursor is valid
 	m.modelTable.SetRows(rows)
 	if len(rows) > 0 {
 		m.modelTable.SetCursor(0)
@@ -2352,13 +2251,9 @@ func parseToolCall(jsonData []byte) (string, error) {
 		return "", fmt.Errorf("code parameter not found in tool call")
 	}
 
-	// Clean up the code
 	code := toolCall.Parameters.Code
-	// Remove literal \n and replace with actual newlines
 	code = strings.ReplaceAll(code, "\\n", "\n")
-	// Remove escaped quotes
 	code = strings.ReplaceAll(code, "\\\"", "\"")
-	// Remove any triple quotes that might be present
 	code = strings.Trim(code, "\"\"\"")
 
 	return code, nil
@@ -2377,7 +2272,7 @@ func executeGolangciLint(code string, agentRole string, m *model) (string, error
 
 	formattedCode := string(formattedBytes)
 
-	// Create a temporary project structure
+	// create temp dir to run checks
 	tmpDir, err := os.MkdirTemp("", "golint_*")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
@@ -2443,10 +2338,9 @@ func executeGolangciLint(code string, agentRole string, m *model) (string, error
 
 func (m *model) updateViewport() {
 	var conversation strings.Builder
-	titleCaser := cases.Title(language.English) // Create a Title caser once
+	titleCaser := cases.Title(language.English)
 
 	for _, msg := range m.conversationHistory {
-		// Instead of strings.Title, use the Title caser
 		role := titleCaser.String(msg["role"])
 		content := msg["content"]
 
