@@ -1032,6 +1032,36 @@ func (m *model) navigate(direction string) {
 	}
 }
 
+func (m *model) refreshModelView() tea.Cmd {
+	return tea.Sequence(
+		func() tea.Msg {
+			// Store current cursor position if there's a selection
+			currentCursor := m.modelTable.Cursor()
+
+			// Fetch new models and update table
+			models, err := fetchModels()
+			if err != nil {
+				return errMsg(err)
+			}
+
+			// Update the table
+			m.populateModelTable(models)
+
+			// Restore cursor position if it's valid
+			if currentCursor < len(m.modelTable.Rows()) {
+				m.modelTable.SetCursor(currentCursor)
+			} else {
+				// If the current cursor would be out of bounds, set it to the last row
+				if len(m.modelTable.Rows()) > 0 {
+					m.modelTable.SetCursor(len(m.modelTable.Rows()) - 1)
+				}
+			}
+
+			return modelsMsg(models)
+		},
+	)
+}
+
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
@@ -1089,9 +1119,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.agentToDelete = ""
 				m.confirmDeleteType = ""
 				m.confirmForm = nil
+
 				switch m.viewMode {
 				case ModelView:
 					m.modelTable.Focus()
+					return m, fetchModelsCmd()
 				case AgentView:
 					m.agentsTable.Focus()
 				}
@@ -1218,39 +1250,78 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch m.confirmForm.State {
 		case huh.StateCompleted:
-			var cmds []tea.Cmd
+			// We determine what to do after confirmation finishes
+			m.viewMode = ModelView // Always return to ModelView after finishing confirm
 			if m.confirmResult {
+				// User chose "Yes"
 				if m.confirmDeleteType == "model" {
-					log.Printf("User confirmed deletion of model: %s\n", m.confirmDeleteModelName)
-					cmds = append(cmds, deleteModelCmd(m.confirmDeleteModelName))
-				} else if m.confirmDeleteType == "agent" {
-					log.Printf("User confirmed deletion of agent: %s\n", m.agentToDelete)
-					cmds = append(cmds, deleteAgentCmd(m.agentToDelete))
+					// Delete the model, then fully re-enter model view (like pressing 'm')
+					return m, tea.Sequence(
+						deleteModelCmd(m.confirmDeleteModelName),
+						func() tea.Msg {
+							m.confirmDeleteModelName = ""
+							m.agentToDelete = ""
+							m.confirmDeleteType = ""
+							m.confirmForm = nil
+							// Focus table to simulate the exact logic as pressing 'm'
+							m.modelTable.Focus()
+							return nil
+						},
+						func() tea.Msg {
+							// Fetch models
+							models, err := fetchModels()
+							if err != nil {
+								return errMsg(err)
+							}
+							m.populateModelTable(models)
+
+							// Now act like pressing 'm' from chatview:
+							m.viewMode = ModelView
+							m.modelTable.Focus()
+							m.textarea.Blur()
+							m.availableTable.Blur()
+							m.agentsTable.Blur()
+							m.parameterSizesTable.Blur()
+
+							return modelsMsg(models)
+						},
+					)
 				}
 			} else {
-				log.Printf("User canceled deletion of %s: %s\n", m.confirmDeleteType, m.confirmDeleteModelName)
+				// User chose "No"
+				if m.confirmDeleteType == "model" {
+					// Do not delete, but still fully re-enter the model view just like pressing 'm'
+					return m, tea.Sequence(
+						func() tea.Msg {
+							m.confirmDeleteModelName = ""
+							m.agentToDelete = ""
+							m.confirmDeleteType = ""
+							m.confirmForm = nil
+							m.modelTable.Focus()
+							return nil
+						},
+						func() tea.Msg {
+							// Re-fetch models to fully re-enter model view
+							models, err := fetchModels()
+							if err != nil {
+								return errMsg(err)
+							}
+							m.populateModelTable(models)
+							return modelsMsg(models)
+						},
+					)
+				}
 			}
 
-			previousView := ModelView
-			if m.confirmDeleteType == "agent" {
-				previousView = AgentView
-			}
-			m.viewMode = previousView
+			// Default case: if it's not a model or no special action needed
 			m.confirmDeleteModelName = ""
 			m.agentToDelete = ""
 			m.confirmDeleteType = ""
 			m.confirmForm = nil
-
-			switch m.viewMode {
-			case ModelView:
-				m.modelTable.Focus()
-			case AgentView:
-				m.agentsTable.Focus()
-			}
-
-			return m, tea.Batch(cmds...)
+			// Return to model view as a fallback
+			m.modelTable.Focus()
+			return m, nil
 		}
-
 		return m, confirmCmd
 	}
 
@@ -1398,24 +1469,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.agentFormActive = false
 				m.agentsTable.Focus()
 				return m, nil
-			case ConfirmDelete:
-				m.viewMode = (func() viewMode {
-					if m.confirmDeleteType == "model" {
-						return ModelView
-					}
-					return AgentView
-				})()
-				m.confirmDeleteModelName = ""
-				m.agentToDelete = ""
-				m.confirmDeleteType = ""
-				m.confirmForm = nil
-				switch m.viewMode {
-				case ModelView:
-					m.modelTable.Focus()
-				case AgentView:
-					m.agentsTable.Focus()
-				}
-				return m, nil
+
 			default:
 				m.viewMode = ChatView
 				m.formActive = false
@@ -1661,13 +1715,12 @@ Important: Always use the check_go_code tool on any Go code you receive. Do not 
 	if strings.Contains(agent.ModelVersion, "llava") || strings.Contains(agent.ModelVersion, "bakllava") {
 		for _, msg := range messages {
 			if strings.Contains(msg["content"], "![") && strings.Contains(msg["content"], "](data:image") {
-				payload["model"] = agent.ModelVersion // Ensure using multimodal model
+				payload["model"] = agent.ModelVersion
 				break
 			}
 		}
 	}
 
-	// Add tools if needed
 	if hasCodeChecker && hasCode {
 		payload["tools"] = []map[string]interface{}{
 			{
@@ -1695,7 +1748,6 @@ Important: Always use the check_go_code tool on any Go code you receive. Do not 
 		return "", fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	// Send request to Ollama API
 	resp, err := http.Post(ollamaAPIURL+"/chat", "application/json", bytes.NewBuffer(requestBody))
 	if err != nil {
 		return "", fmt.Errorf("failed to send request to Ollama API: %w", err)
@@ -1727,7 +1779,6 @@ Important: Always use the check_go_code tool on any Go code you receive. Do not 
 	var fullResponse strings.Builder
 	fullResponse.WriteString(fmt.Sprintf("Response from %s:\n\n", agent.Role))
 
-	// Only add "Initial Analysis" header when using code checker
 	if hasCodeChecker && hasCode {
 		if !strings.Contains(apiResponse.Message.Content, `{"name": "check_go_code"`) {
 			fullResponse.WriteString("Initial Analysis:\n")
@@ -1735,7 +1786,6 @@ Important: Always use the check_go_code tool on any Go code you receive. Do not 
 	}
 	fullResponse.WriteString(apiResponse.Message.Content)
 
-	// Process tool calls if any
 	if len(apiResponse.Message.ToolCalls) > 0 {
 		for _, toolCall := range apiResponse.Message.ToolCalls {
 			if toolCall.Function.Name == "check_go_code" {
@@ -1756,7 +1806,6 @@ Important: Always use the check_go_code tool on any Go code you receive. Do not 
 
 				lintResult, err := executeGolangciLint(code, agent.Role, m)
 				if err != nil {
-					// Send the lint results back to the agent for analysis
 					analysisMessages := append(messages,
 						map[string]string{
 							"role":    "assistant",
@@ -1768,7 +1817,6 @@ Important: Always use the check_go_code tool on any Go code you receive. Do not 
 						},
 					)
 
-					// Make a second API call for analysis of the lint results
 					analysisPayload := map[string]interface{}{
 						"model":    agent.ModelVersion,
 						"messages": analysisMessages,
@@ -1808,7 +1856,6 @@ Important: Always use the check_go_code tool on any Go code you receive. Do not 
 		}
 	}
 
-	// Add the final response to conversation history
 	m.conversationHistory = append(m.conversationHistory, map[string]string{
 		"role":    "assistant",
 		"content": fullResponse.String(),
@@ -1893,7 +1940,6 @@ func (m *model) handleEnterKey() (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			// Use the new selection handler
 			m.handleChatSelection(&chatItem.chat)
 			return m, nil
 		}
@@ -1911,19 +1957,16 @@ func (m *model) handleEnterKey() (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			// Create new chat with both name and project name
 			err := m.createNewChat(m.newChatName, m.newProjectName)
 			if err != nil {
 				m.errorMessage = fmt.Sprintf("Failed to create new chat: %v", err)
 				return m, nil
 			}
 
-			// Reset form and fields for next use
 			m.newChatName = ""
 			m.newProjectName = ""
 			m.newChatForm = createNewChatForm(&m.newChatName, &m.newProjectName)
 
-			// Switch back to ChatView
 			m.viewMode = ChatView
 			m.formActive = false
 			m.updateViewport()
@@ -2070,7 +2113,7 @@ func (m model) ViewWithoutError() string {
 			Foreground(lipgloss.Color("#FFFFFF")).
 			Background(lipgloss.Color("#666666")).
 			Padding(0, 1).
-			MarginBottom(1). // Add margin below header
+			MarginBottom(1).
 			Render("Chat List (Enter to select, / to search, ESC to go back)")
 
 		return fmt.Sprintf("%s\n%s", header, m.chatList.View())
@@ -2136,7 +2179,13 @@ func fetchModelsCmd() tea.Cmd {
 func (m *model) populateModelTable(models []OllamaModel) {
 	var rows []table.Row
 
+	// Always start with Add New Model row
 	rows = append(rows, table.Row{"Add New Model", "N/A", "N/A"})
+
+	// Sort the models to ensure consistent ordering
+	sort.Slice(models, func(i, j int) bool {
+		return models[i].Name < models[j].Name
+	})
 
 	for _, mdl := range models {
 		rows = append(rows, table.Row{
@@ -2145,7 +2194,19 @@ func (m *model) populateModelTable(models []OllamaModel) {
 			FormatSizeGB(mdl.Size),
 		})
 	}
+
+	// Update table columns to ensure proper width
+	m.modelTable.SetColumns([]table.Column{
+		{Title: "Name", Width: 30},
+		{Title: "Parameter Size", Width: 15},
+		{Title: "Size (GB)", Width: 10},
+	})
+
+	// Set rows and ensure cursor is valid
 	m.modelTable.SetRows(rows)
+	if len(rows) > 0 {
+		m.modelTable.SetCursor(0)
+	}
 }
 
 func (m *model) populateAvailableModelsTable(models []AvailableModel) {
@@ -2226,10 +2287,8 @@ func (m *model) saveCurrentChat() error {
 		return fmt.Errorf("no chat selected")
 	}
 
-	// Update the selected chat's messages with the current conversation history
 	m.selectedChat.Messages = m.conversationHistory
 
-	// Save the updated chat to file
 	return saveChat(*m.selectedChat, m.chatsFolderPath)
 }
 
@@ -2240,7 +2299,6 @@ func sendChatMessage(m *model) tea.Cmd {
 			return nil
 		}
 
-		// Add user message to conversation history
 		m.conversationHistory = append(m.conversationHistory, map[string]string{
 			"role":    "user",
 			"content": m.currentUserMessage,
@@ -2253,17 +2311,15 @@ func sendChatMessage(m *model) tea.Cmd {
 		var lastResponse string
 		currentInput := m.currentUserMessage
 
-		// Process each agent in sequence
 		for _, agent := range m.agents {
 			response, err := processAgentChain(currentInput, m, agent)
 			if err != nil {
 				return errMsg(fmt.Errorf("error processing agent '%s': %w", agent.Role, err))
 			}
 			lastResponse = response
-			currentInput = response // Use this agent's response as input for the next agent
+			currentInput = response
 		}
 
-		// Update the model's state
 		m.assistantResponses = append(m.assistantResponses, lastResponse)
 		m.userMessages = append(m.userMessages, m.currentUserMessage)
 		m.currentUserMessage = ""
@@ -2272,7 +2328,6 @@ func sendChatMessage(m *model) tea.Cmd {
 		m.textarea.Blur()
 		m.updateViewport()
 
-		// Save the updated chat
 		if err := m.saveCurrentChat(); err != nil {
 			return errMsg(fmt.Errorf("failed to save chat: %w", err))
 		}
@@ -2499,12 +2554,10 @@ func extractCodeBlocks(input string) []string {
 
 		if strings.HasPrefix(line, "```") {
 			if !inCodeBlock {
-				// Starting a code block
 				inCodeBlock = true
 				isGoBlock = strings.HasPrefix(line, "```go")
 				currentBlock.Reset()
 			} else {
-				// Ending a code block
 				if isGoBlock {
 					codeBlocks = append(codeBlocks, currentBlock.String())
 				}
@@ -2558,7 +2611,6 @@ func fetchAvailableModelsCmd() tea.Cmd {
 	}
 }
 
-// function to scrape ollama library
 func scrapeOllamaLibrary() ([]AvailableModel, error) {
 	url := "https://ollama.com/library"
 	response, err := http.Get(url)
@@ -2585,7 +2637,6 @@ func scrapeOllamaLibrary() ([]AvailableModel, error) {
 	return models, nil
 }
 
-// helper function for scrapeOllamaLibrary
 func parseContent(doc *goquery.Document) []AvailableModel {
 	var models []AvailableModel
 	liElements := doc.Find("li")
@@ -2630,12 +2681,61 @@ type AvailableModel struct {
 	Sizes []string `json:"sizes"`
 }
 
+type PullResponse struct {
+	Status    string  `json:"status"`
+	Digest    string  `json:"digest,omitempty"`
+	Total     int64   `json:"total,omitempty"`
+	Completed int64   `json:"completed,omitempty"`
+	Progress  float64 `json:"progress,omitempty"`
+}
+
+func downloadModelUsingAPI(modelName string) error {
+	requestBody, err := json.Marshal(map[string]string{
+		"name": modelName,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", ollamaAPIURL+"/pull", bytes.NewBuffer(requestBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	decoder := json.NewDecoder(resp.Body)
+	for {
+		var pullResp PullResponse
+		if err := decoder.Decode(&pullResp); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return fmt.Errorf("failed to decode response: %w", err)
+		}
+
+		if strings.HasPrefix(pullResp.Status, "error") {
+			return fmt.Errorf("pull error: %s", pullResp.Status)
+		}
+
+		if pullResp.Status == "success" {
+			break
+		}
+	}
+
+	return nil
+}
+
 func downloadModelCmd(modelName string) tea.Cmd {
 	return func() tea.Msg {
-		cmd := exec.Command("ollama", "pull", modelName)
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			return errMsg(fmt.Errorf("failed to download model: %v, output: %s", err, string(output)))
+		if err := downloadModelUsingAPI(modelName); err != nil {
+			return errMsg(fmt.Errorf("failed to download model: %w", err))
 		}
 		return modelDownloadedMsg(modelName)
 	}

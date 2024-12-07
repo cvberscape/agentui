@@ -14,7 +14,7 @@
     "system_prompt": "",
     "use_context": false,
     "context_file_path": "",
-    "use_conversation": true,
+    "use_conversation": false,
     "tokens": "",
     "tools": [
       {
