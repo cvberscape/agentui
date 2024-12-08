@@ -504,6 +504,14 @@ func createAgentForm(agent *Agent, modelVersions []string, availableTools []Tool
 		toolOptions = append(toolOptions, huh.NewOption(tool.Name, tool.Name))
 	}
 
+	// Define token options with common sizes
+	tokenOptions := []huh.Option[string]{
+		huh.NewOption("2048 tokens", "2048"),
+		huh.NewOption("4096 tokens", "4096"),
+		huh.NewOption("8192 tokens", "8192"),
+		huh.NewOption("16384 tokens", "16384"),
+	}
+
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
@@ -563,9 +571,9 @@ func createAgentForm(agent *Agent, modelVersions []string, availableTools []Tool
 				).
 				Value(&agent.UseConversation),
 
-			huh.NewInput().
-				Title("Tokens").
-				Placeholder("16384").
+			huh.NewSelect[string]().
+				Title("Token Limit").
+				Options(tokenOptions...).
 				Value(&agent.Tokens),
 
 			huh.NewMultiSelect[string]().
@@ -1183,9 +1191,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch m.confirmForm.State {
 		case huh.StateCompleted:
-			m.viewMode = ModelView
-			if m.confirmResult {
-				if m.confirmDeleteType == "model" {
+			if m.confirmDeleteType == "model" {
+				m.viewMode = ModelView
+				if m.confirmResult {
 					return m, tea.Sequence(
 						deleteModelCmd(m.confirmDeleteModelName),
 						func() tea.Msg {
@@ -1213,9 +1221,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							return modelsMsg(models)
 						},
 					)
-				}
-			} else {
-				if m.confirmDeleteType == "model" {
+				} else {
 					return m, tea.Sequence(
 						func() tea.Msg {
 							m.confirmDeleteModelName = ""
@@ -1235,13 +1241,34 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						},
 					)
 				}
+			} else if m.confirmDeleteType == "agent" {
+				m.viewMode = AgentView
+				if m.confirmResult {
+					return m, tea.Sequence(
+						deleteAgentCmd(m.agentToDelete),
+						func() tea.Msg {
+							m.confirmDeleteModelName = ""
+							m.agentToDelete = ""
+							m.confirmDeleteType = ""
+							m.confirmForm = nil
+							m.agentsTable.Focus()
+							return nil
+						},
+					)
+				} else {
+					m.confirmDeleteModelName = ""
+					m.agentToDelete = ""
+					m.confirmDeleteType = ""
+					m.confirmForm = nil
+					m.agentsTable.Focus()
+					return m, nil
+				}
 			}
 
 			m.confirmDeleteModelName = ""
 			m.agentToDelete = ""
 			m.confirmDeleteType = ""
 			m.confirmForm = nil
-			m.modelTable.Focus()
 			return m, nil
 		}
 		return m, confirmCmd
@@ -1555,6 +1582,8 @@ func processAgentChain(input string, m *model, agent Agent) (string, error) {
 		}
 	}
 
+	var systemPrompt string
+
 	hasCodeChecker := false
 	for _, tool := range agent.Tools {
 		if tool.Name == "check_go_code" {
@@ -1562,11 +1591,11 @@ func processAgentChain(input string, m *model, agent Agent) (string, error) {
 			break
 		}
 	}
+
 	codeBlocks := extractCodeBlocks(input)
 	hasCode := len(codeBlocks) > 0
 
 	// if an agent is given golinter tool and go code is detected, system prompt is overridden
-	var systemPrompt string
 	if hasCodeChecker && hasCode {
 		systemPrompt = `You are a code review assistant. Your primary task is to analyze and test Go code.
 Follow these steps for each code review:
@@ -1594,18 +1623,28 @@ Important: Always use the check_go_code tool on any Go code you receive. Do not 
 			systemPrompt = fmt.Sprintf("%s\n\nContext: %s", systemPrompt, contextContent)
 		}
 	} else {
-		if contextContent != "" {
-			systemPrompt = strings.ReplaceAll(agent.SystemPrompt, "{context}", contextContent)
+		if agent.SystemPrompt == "" {
+			systemPrompt = defaultSystemPrompt
 		} else {
-			systemPrompt = strings.ReplaceAll(agent.SystemPrompt, "{context}", "")
+			systemPrompt = agent.SystemPrompt
+		}
+
+		if contextContent != "" {
+			if strings.Contains(systemPrompt, "{context}") {
+				systemPrompt = strings.ReplaceAll(systemPrompt, "{context}", contextContent)
+			} else {
+				systemPrompt = fmt.Sprintf("%s\n\nContext:\n%s", systemPrompt, contextContent)
+			}
+		} else {
+			systemPrompt = strings.ReplaceAll(systemPrompt, "{context}", "")
+			systemPrompt = strings.TrimSpace(systemPrompt)
 		}
 	}
 
 	var messages []map[string]string
-
 	messages = append(messages, map[string]string{
 		"role":    "system",
-		"content": agent.SystemPrompt,
+		"content": systemPrompt,
 	})
 
 	if agent.UseConversation {
@@ -1617,10 +1656,18 @@ Important: Always use the check_go_code tool on any Go code you receive. Do not 
 		"content": input,
 	})
 
+	contextWindow, err := strconv.Atoi(agent.Tokens)
+	if err != nil || contextWindow <= 0 {
+		contextWindow = 2048
+	}
+
 	payload := map[string]interface{}{
 		"model":    agent.ModelVersion,
 		"messages": messages,
 		"stream":   false,
+		"options": map[string]interface{}{
+			"num_ctx": contextWindow,
+		},
 	}
 
 	// mm support
@@ -1767,11 +1814,6 @@ Important: Always use the check_go_code tool on any Go code you receive. Do not 
 			}
 		}
 	}
-
-	m.conversationHistory = append(m.conversationHistory, map[string]string{
-		"role":    "assistant",
-		"content": fullResponse.String(),
-	})
 
 	return fullResponse.String(), nil
 }
@@ -2207,6 +2249,7 @@ func sendChatMessage(m *model) tea.Cmd {
 			return nil
 		}
 
+		// Add user message to conversation history
 		m.conversationHistory = append(m.conversationHistory, map[string]string{
 			"role":    "user",
 			"content": m.currentUserMessage,
@@ -2226,6 +2269,12 @@ func sendChatMessage(m *model) tea.Cmd {
 			}
 			lastResponse = response
 			currentInput = response
+
+			// Add each agent's response to conversation history
+			m.conversationHistory = append(m.conversationHistory, map[string]string{
+				"role":    "assistant",
+				"content": response,
+			})
 		}
 
 		m.assistantResponses = append(m.assistantResponses, lastResponse)
