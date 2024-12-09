@@ -24,6 +24,8 @@ cd agentui
 go run .
 ```
 
+should work out of the box on any unix system but untested, tested system config: artix linux and alacritty/kitty as terminal emulators
+
 currently all persistent data (chats, agent configs) are saved at the root dir of the project, this is easier for now for testing purposes, will be changed to persist at .config at some point
 
 the app also contains quite a bit of logging code for now which might obstruct the ui on occasion
@@ -63,7 +65,7 @@ the app also contains quite a bit of logging code for now which might obstruct t
         d: delete hovered model
 
     Agent View
-        Enteru: add/edit agent depending on hovered selection
+        Enter: add/edit agent depending on hovered selection
         a: add new agent
         e: edit selected agent
         d: delete agent
