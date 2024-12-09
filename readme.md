@@ -63,6 +63,7 @@ the app also contains quite a bit of logging code for now which might obstruct t
         d: delete hovered model
 
     Agent View
+        Enteru: add/edit agent depending on hovered selection
         a: add new agent
         e: edit selected agent
         d: delete agent
