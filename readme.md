@@ -12,9 +12,17 @@
 
 ## Running the app
 
+```sh
 git clone <https://github.com/CVBERSCAPE/agentui.git>
+```
+
+```sh
 cd agentui
+```
+
+```sh
 go run .
+```
 
 currently all persistent data (chats, agent configs) are saved at the root dir of the project, this is easier for now for testing purposes, will be changed to persist at .config at some point
 
