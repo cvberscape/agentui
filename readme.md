@@ -4,6 +4,7 @@
 
 - support for multimodal models // WIP
 - more robust agent customization (api parameters)
+- make chat more responsive, currently chat re-renders once the entire agent chain is processed which works but is not ideal for user experience. more responsive re-renders and streaming for non tool-calling agents
 - bindings for adding external tools (bash or python scripts etc)
 - customizable signals for agent processing
 - efficiency/QOL features for chat interface
