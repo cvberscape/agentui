@@ -52,6 +52,7 @@ the app also contains quite a bit of logging code for now which might obstruct t
 
     Insert View (when typing a user message)
         Enter: send message
+        ESC: exit insert mode
 
     Chat List View
         Enter: select/create new chat
