@@ -22,6 +22,10 @@ cd agentui
 ```
 
 ```sh
+go mod tidy
+```
+
+```sh
 go run .
 ```
 
