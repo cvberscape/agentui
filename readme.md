@@ -13,7 +13,7 @@
 ## Running the app
 
 ```sh
-git clone <https://github.com/CVBERSCAPE/agentui.git>
+git clone https://github.com/CVBERSCAPE/agentui.git
 ```
 
 ```sh
