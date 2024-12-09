@@ -9,6 +9,7 @@
 - efficiency/QOL features for chat interface
 - more refined/aesthetic UI
 - optimizations
+- should probably modularize the code to make it more readable rather than having 2.7k lines of code slapped into a single main.go file, i just prefer it this way for now
 
 ## Running the app
 
