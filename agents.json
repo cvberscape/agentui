@@ -15,7 +15,7 @@
     "use_context": false,
     "context_file_path": "",
     "use_conversation": false,
-    "tokens": "2048",
+    "tokens": "8192",
     "tools": [
       {
         "name": "check_go_code",

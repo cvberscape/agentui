@@ -591,6 +591,10 @@ func (m *model) updateChatList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if keyIsCtrlZ(msg) {
+			return m, tea.Quit
+		}
+
 		switch keypress := msg.String(); keypress {
 		case "up", "k":
 			if m.chatList.Index() > 0 {
