@@ -34,109 +34,6 @@ import (
 	"golang.org/x/text/language"
 )
 
-type Chat struct {
-	ID          string              `json:"id"`
-	Name        string              `json:"name"`
-	ProjectName string              `json:"project_name"`
-	CreatedAt   time.Time           `json:"created_at"`
-	Messages    []map[string]string `json:"messages"`
-}
-type chatItem struct {
-	chat Chat
-}
-
-func (i chatItem) FilterValue() string {
-	return i.chat.Name
-}
-
-func (i chatItem) Title() string {
-	return i.chat.Name
-}
-
-var docStyle = lipgloss.NewStyle().Margin(1, 2)
-
-func (i chatItem) Description() string {
-	return fmt.Sprintf("Project: %s | Created: %s | Messages: %d",
-		i.chat.ProjectName,
-		i.chat.CreatedAt.Format("2006-01-02 15:04:05"),
-		len(i.chat.Messages))
-}
-
-type chatDelegate struct {
-	styles struct {
-		normal, selected lipgloss.Style
-	}
-}
-
-type (
-	responseMsg        string
-	errMsg             error
-	modelsMsg          []OllamaModel
-	availableModelsMsg []AvailableModel
-	modelDeletedMsg    struct{}
-	modelDownloadedMsg string
-	scrapeCompletedMsg struct{}
-	agentsMsg          []Agent
-	notifyMsg          string
-	OllamaToggledMsg   struct{}
-)
-
-type agentDeletedMsg struct {
-	Role string
-}
-
-type agentUpdatedMsg struct {
-	Role string
-}
-
-type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Parameters  map[string]interface{} `json:"parameters"`
-}
-
-type ToolUsage struct {
-	Timestamp    time.Time `json:"timestamp"`
-	AgentRole    string    `json:"agent_role"`
-	ToolName     string    `json:"tool_name"`
-	Input        string    `json:"input,omitempty"`
-	Output       string    `json:"output"`
-	Success      bool      `json:"success"`
-	ErrorMessage string    `json:"error_message,omitempty"`
-}
-
-type ToolCall struct {
-	Name       string            `json:"name"`
-	Parameters map[string]string `json:"parameters"`
-}
-
-type Agent struct {
-	Role            string   `json:"role"`
-	ModelVersion    string   `json:"model_version"`
-	SystemPrompt    string   `json:"system_prompt"`
-	UseContext      bool     `json:"use_context"`
-	ContextFilePath string   `json:"context_file_path"`
-	UseConversation bool     `json:"use_conversation"`
-	Tokens          string   `json:"tokens"`
-	Tools           []Tool   `json:"tools,omitempty"`
-	SelectedTools   []string `json:"selected_tools,omitempty"`
-}
-
-var checkGoCodeTool = Tool{
-	Name:        "check_go_code",
-	Description: "Check Go code for errors and style issues using golint.",
-	Parameters: map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"code": map[string]interface{}{
-				"type":        "string",
-				"description": "The Go code to check for errors.",
-			},
-		},
-		"required": []string{"code"},
-	},
-}
-
 type viewMode int
 
 const (
@@ -149,9 +46,9 @@ const (
 	ParameterSizesView
 	DownloadingView
 	ConfirmDelete
-	ChatListView viewMode = iota
+	ChatListView
 	NewChatFormView
-	FilePickerView viewMode = iota + 20
+	FilePickerView
 )
 
 const (
@@ -167,29 +64,6 @@ const (
 	confirmDeleteModelTitle = "Confirm Model Deletion"
 	agentsFilePath          = "./agents.json"
 )
-
-var (
-	runningIndicatorColor = lipgloss.Color("#00FF00")
-	stoppedIndicatorColor = lipgloss.Color("#FF0000")
-	errorStyle            = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#FF0000")).
-				Bold(true)
-)
-
-func (m *model) indicatorStyle() lipgloss.Style {
-	var color lipgloss.Color
-	if m.ollamaRunning {
-		color = runningIndicatorColor
-	} else {
-		color = stoppedIndicatorColor
-	}
-
-	return lipgloss.NewStyle().
-		Foreground(color).
-		Background(lipgloss.Color("#000000")).
-		Border(lipgloss.HiddenBorder()).
-		Padding(0)
-}
 
 type model struct {
 	userMessages           []string
@@ -244,6 +118,30 @@ type model struct {
 	selectedImage          string
 }
 
+type OllamaModel struct {
+	Name       string    `json:"name"`
+	Model      string    `json:"model"`
+	ModifiedAt time.Time `json:"modified_at"`
+	Size       int64     `json:"size"`
+	Details    struct {
+		ParameterSize     string `json:"parameter_size"`
+		QuantizationLevel string `json:"quantization_level"`
+	} `json:"details"`
+}
+
+type AvailableModel struct {
+	Name  string   `json:"name"`
+	Sizes []string `json:"sizes"`
+}
+
+type PullResponse struct {
+	Status    string  `json:"status"`
+	Digest    string  `json:"digest,omitempty"`
+	Total     int64   `json:"total,omitempty"`
+	Completed int64   `json:"completed,omitempty"`
+	Progress  float64 `json:"progress,omitempty"`
+}
+
 type ChatConfig struct {
 	ModelVersion    string
 	SystemPrompt    string
@@ -251,370 +149,114 @@ type ChatConfig struct {
 	Tokens          string
 }
 
-func loadFileContext(filePath string) (string, error) {
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read file %s: %w", filePath, err)
-	}
-	return string(content), nil
+type Chat struct {
+	ID          string              `json:"id"`
+	Name        string              `json:"name"`
+	ProjectName string              `json:"project_name"`
+	CreatedAt   time.Time           `json:"created_at"`
+	Messages    []map[string]string `json:"messages"`
+}
+type chatItem struct {
+	chat Chat
 }
 
-func saveAgents(m *model) error {
-	data, err := json.MarshalIndent(m.agents, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal agents: %w", err)
-	}
-
-	err = os.WriteFile(agentsFilePath, data, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write agents to file: %w", err)
-	}
-
-	return nil
-}
-
-func loadAgents(m *model) error {
-	if _, err := os.Stat(agentsFilePath); os.IsNotExist(err) {
-		return nil
-	}
-
-	data, err := os.ReadFile(agentsFilePath)
-	if err != nil {
-		return fmt.Errorf("failed to read agents file: %w", err)
-	}
-
-	var loadedAgents []Agent
-	err = json.Unmarshal(data, &loadedAgents)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal agents: %w", err)
-	}
-
-	m.agents = loadedAgents
-
-	return nil
-}
-
-func newChatDelegate() chatDelegate {
-	d := chatDelegate{}
-
-	d.styles.normal = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FFFFFF")).
-		Padding(0, 0, 0, 2).
-		MarginBottom(1)
-
-	d.styles.selected = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#000000")).
-		Background(lipgloss.Color("#00FF00")).
-		Padding(0, 0, 0, 2).
-		MarginBottom(1)
-
-	return d
-}
-
-func (d chatDelegate) Height() int {
-	return 3
-}
-
-func (d chatDelegate) Spacing() int {
-	return 0
-}
-
-func (d chatDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd {
-	return nil
-}
-
-func (d chatDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
-	i, ok := listItem.(chatItem)
-	if !ok {
-		return
-	}
-
-	title := i.Title()
-	desc := i.Description()
-
-	str := fmt.Sprintf("%s\n%s", title, desc)
-
-	fn := d.styles.normal.Render
-	if index == m.Index() {
-		fn = d.styles.selected.Render
-	}
-
-	fmt.Fprint(w, fn(str))
-}
-
-func createNewChatForm(name *string, projectName *string) *huh.Form {
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Chat Name").
-				Placeholder("Enter a name for the new chat").
-				Value(name).
-				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return fmt.Errorf("chat name cannot be empty")
-					}
-					if len(s) > 50 {
-						return fmt.Errorf("chat name too long (max 50 characters)")
-					}
-					return nil
-				}),
-
-			huh.NewInput().
-				Title("Project Name").
-				Placeholder("Enter the project name").
-				Value(projectName).
-				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return fmt.Errorf("project name cannot be empty")
-					}
-					if len(s) > 100 {
-						return fmt.Errorf("project name too long (max 100 characters)")
-					}
-					return nil
-				}),
-		),
-	).WithShowHelp(true)
-	form.NextField()
-	form.PrevField()
-	return form
-}
-
-func (m *model) initializeChatList() error {
-	// Create chats directory if it doesn't exist
-	if err := os.MkdirAll(m.chatsFolderPath, 0755); err != nil {
-		return fmt.Errorf("failed to create chats directory: %w", err)
-	}
-
-	chats, err := loadChats(m.chatsFolderPath)
-	if err != nil {
-		return fmt.Errorf("failed to load chats: %w", err)
-	}
-
-	items := make([]list.Item, 0, len(chats)+1)
-	items = append(items, chatItem{Chat{Name: "Create New Chat", ProjectName: ""}})
-	for _, chat := range chats {
-		items = append(items, chatItem{chat})
-	}
-
-	delegate := newChatDelegate()
-	m.chatList = list.New(items, delegate, m.width, m.height-4)
-	m.chatList.Title = "Chat List"
-	m.chatList.SetShowStatusBar(false)
-	m.chatList.SetFilteringEnabled(true)
-	m.chatList.Styles.Title = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FFFFFF")).
-		Background(lipgloss.Color("#666666")).
-		Padding(0, 1)
-
-	m.chatList.Styles.NoItems = lipgloss.NewStyle().Margin(1, 2)
-	m.chatList.SetSize(m.width, m.height-4)
-
-	return nil
-}
-
-func triggerWindowResize(width, height int) tea.Cmd {
-	return func() tea.Msg {
-		return tea.WindowSizeMsg{
-			Width:  width,
-			Height: height,
-		}
+type chatDelegate struct {
+	styles struct {
+		normal, selected lipgloss.Style
 	}
 }
 
-func (m *model) updateChatList(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
+type (
+	responseMsg        string
+	errMsg             error
+	modelsMsg          []OllamaModel
+	availableModelsMsg []AvailableModel
+	modelDeletedMsg    struct{}
+	modelDownloadedMsg string
+	scrapeCompletedMsg struct{}
+	agentsMsg          []Agent
+	notifyMsg          string
+	OllamaToggledMsg   struct{}
+)
 
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		headerHeight := 3
-		m.chatList.SetSize(msg.Width-2, msg.Height-headerHeight)
-		return m, nil
-
-	case tea.KeyMsg:
-		switch keypress := msg.String(); keypress {
-		case "up", "k":
-			if m.chatList.Index() > 0 {
-				m.chatList.CursorUp()
-			}
-			return m, nil
-
-		case "down", "j":
-			if m.chatList.Index() < len(m.chatList.Items())-1 {
-				m.chatList.CursorDown()
-			}
-			return m, nil
-
-		case "enter":
-			selectedItem := m.chatList.SelectedItem()
-			if selectedItem == nil {
-				return m, nil
-			}
-
-			if chatItem, ok := selectedItem.(chatItem); ok {
-				if chatItem.chat.Name == "Create New Chat" {
-					m.viewMode = NewChatFormView
-					m.formActive = true
-					m.newChatName = ""
-					m.newProjectName = ""
-					m.newChatForm = createNewChatForm(&m.newChatName, &m.newProjectName)
-					return m, nil
-				}
-
-				m.selectedChat = &chatItem.chat
-				m.conversationHistory = chatItem.chat.Messages
-				m.viewMode = ChatView
-				m.updateViewport()
-				return m, nil
-			}
-		}
-	}
-
-	m.chatList, cmd = m.chatList.Update(msg)
-	return m, cmd
+type agentDeletedMsg struct {
+	Role string
 }
 
-func (m *model) createNewChat(name string, projectName string) error {
-	chat := createNewChat(name, projectName)
-
-	if err := saveChat(chat, m.chatsFolderPath); err != nil {
-		return fmt.Errorf("failed to save new chat: %w", err)
-	}
-
-	m.chatList.InsertItem(1, chatItem{chat})
-
-	m.selectedChat = &chat
-	m.conversationHistory = []map[string]string{}
-	m.viewMode = ChatView
-
-	return nil
+type agentUpdatedMsg struct {
+	Role string
 }
 
-func createAgentForm(agent *Agent, modelVersions []string, availableTools []Tool) *huh.Form {
-	if agent.SelectedTools == nil {
-		agent.SelectedTools = []string{}
-	}
+type initialTransitionMsg struct{}
 
-	modelOptions := make([]huh.Option[string], 0, len(modelVersions))
-	for _, mv := range modelVersions {
-		modelOptions = append(modelOptions, huh.NewOption(mv, mv))
-	}
-
-	toolOptions := make([]huh.Option[string], 0, len(availableTools))
-	for _, tool := range availableTools {
-		toolOptions = append(toolOptions, huh.NewOption(tool.Name, tool.Name))
-	}
-
-	// Define token options with common sizes
-	tokenOptions := []huh.Option[string]{
-		huh.NewOption("2048 tokens", "2048"),
-		huh.NewOption("4096 tokens", "4096"),
-		huh.NewOption("8192 tokens", "8192"),
-		huh.NewOption("16384 tokens", "16384"),
-	}
-
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Role").
-				Placeholder("Enter a unique role identifier").
-				Value(&agent.Role),
-
-			huh.NewSelect[string]().
-				Title("Model Version").
-				Options(modelOptions...).
-				Value(&agent.ModelVersion),
-
-			huh.NewText().
-				Title("System Prompt").
-				Value(&agent.SystemPrompt),
-
-			huh.NewSelect[bool]().
-				Title("Use Context File").
-				Options(
-					huh.NewOption("Yes", true),
-					huh.NewOption("No", false),
-				).
-				Value(&agent.UseContext),
-
-			huh.NewInput().
-				Value(&agent.ContextFilePath).
-				TitleFunc(func() string {
-					if agent.UseContext {
-						return "Context File Path"
-					}
-					return "Context Status"
-				}, &agent.UseContext).
-				PlaceholderFunc(func() string {
-					if agent.UseContext {
-						return "/path/to/your/context/file"
-					}
-					return "No context file selected"
-				}, &agent.UseContext).
-				Validate(func(s string) error {
-					if !agent.UseContext {
-						return nil
-					}
-					if s == "" {
-						return fmt.Errorf("context file path is required when context is enabled")
-					}
-					if _, err := os.Stat(s); err != nil {
-						return fmt.Errorf("file not found: %s", s)
-					}
-					return nil
-				}),
-
-			huh.NewSelect[bool]().
-				Title("Use Conversation History").
-				Options(
-					huh.NewOption("Yes", true),
-					huh.NewOption("No", false),
-				).
-				Value(&agent.UseConversation),
-
-			huh.NewSelect[string]().
-				Title("Token Limit").
-				Options(tokenOptions...).
-				Value(&agent.Tokens),
-
-			huh.NewMultiSelect[string]().
-				Title("Tools").
-				Options(toolOptions...).
-				Value(&agent.SelectedTools),
-		),
-	).WithShowHelp(true)
-	form.NextField()
-	form.PrevField()
-
-	return form
+type Tool struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Parameters  map[string]interface{} `json:"parameters"`
 }
 
-func createConfirmForm(title string, confirmResult *bool) *huh.Form {
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewConfirm().
-				Title(title).
-				Affirmative("Yes").
-				Negative("No").
-				Value(confirmResult),
-		),
-	).WithShowHelp(false)
-	return form
+type ToolUsage struct {
+	Timestamp    time.Time `json:"timestamp"`
+	AgentRole    string    `json:"agent_role"`
+	ToolName     string    `json:"tool_name"`
+	Input        string    `json:"input,omitempty"`
+	Output       string    `json:"output"`
+	Success      bool      `json:"success"`
+	ErrorMessage string    `json:"error_message,omitempty"`
 }
 
-func setupTextarea() textarea.Model {
-	ta := textarea.New()
-	ta.Placeholder = "Ask something..."
-	ta.Focus()
-	ta.CharLimit = 0
-	ta.SetWidth(50)
-	ta.SetHeight(3)
+type ToolCall struct {
+	Name       string            `json:"name"`
+	Parameters map[string]string `json:"parameters"`
+}
 
-	indicatorStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FFFFFF")).
-		Render(defaultIndicatorPrompt)
+type Agent struct {
+	Role            string   `json:"role"`
+	ModelVersion    string   `json:"model_version"`
+	SystemPrompt    string   `json:"system_prompt"`
+	UseContext      bool     `json:"use_context"`
+	ContextFilePath string   `json:"context_file_path"`
+	UseConversation bool     `json:"use_conversation"`
+	Tokens          string   `json:"tokens"`
+	Tools           []Tool   `json:"tools,omitempty"`
+	SelectedTools   []string `json:"selected_tools,omitempty"`
+}
 
-	ta.Prompt = indicatorStyle
-	return ta
+var checkGoCodeTool = Tool{
+	Name:        "check_go_code",
+	Description: "Check Go code for errors and style issues using golint.",
+	Parameters: map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"code": map[string]interface{}{
+				"type":        "string",
+				"description": "The Go code to check for errors.",
+			},
+		},
+		"required": []string{"code"},
+	},
+}
+
+var (
+	runningIndicatorColor = lipgloss.Color("#00FF00")
+	stoppedIndicatorColor = lipgloss.Color("#FF0000")
+	errorStyle            = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FF0000")).
+				Bold(true)
+)
+
+var docStyle = lipgloss.NewStyle().Margin(1, 2)
+
+func (m *model) Init() tea.Cmd {
+	return tea.Batch(
+		textarea.Blink,
+		tea.EnterAltScreen,
+		fetchModelsCmd(),
+		m.spinner.Tick,
+		func() tea.Msg {
+			return initialTransitionMsg{}
+		},
+	)
 }
 
 func InitialModel() *model {
@@ -770,6 +412,391 @@ func InitialModel() *model {
 	return m
 }
 
+func setupTextarea() textarea.Model {
+	ta := textarea.New()
+	ta.Placeholder = "Ask something..."
+	ta.Focus()
+	ta.CharLimit = 0
+	ta.SetWidth(50)
+	ta.SetHeight(3)
+
+	indicatorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Render(defaultIndicatorPrompt)
+
+	ta.Prompt = indicatorStyle
+	return ta
+}
+
+func (m *model) indicatorStyle() lipgloss.Style {
+	var color lipgloss.Color
+	if m.ollamaRunning {
+		color = runningIndicatorColor
+	} else {
+		color = stoppedIndicatorColor
+	}
+
+	return lipgloss.NewStyle().
+		Foreground(color).
+		Background(lipgloss.Color("#000000")).
+		Border(lipgloss.HiddenBorder()).
+		Padding(0)
+}
+
+func loadFileContext(filePath string) (string, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file %s: %w", filePath, err)
+	}
+	return string(content), nil
+}
+
+func saveAgents(m *model) error {
+	data, err := json.MarshalIndent(m.agents, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal agents: %w", err)
+	}
+
+	err = os.WriteFile(agentsFilePath, data, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write agents to file: %w", err)
+	}
+
+	return nil
+}
+
+func loadAgents(m *model) error {
+	if _, err := os.Stat(agentsFilePath); os.IsNotExist(err) {
+		return nil
+	}
+
+	data, err := os.ReadFile(agentsFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to read agents file: %w", err)
+	}
+
+	var loadedAgents []Agent
+	err = json.Unmarshal(data, &loadedAgents)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal agents: %w", err)
+	}
+
+	m.agents = loadedAgents
+
+	return nil
+}
+
+func newChatDelegate() chatDelegate {
+	d := chatDelegate{}
+
+	d.styles.normal = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Padding(0, 0, 0, 2).
+		MarginBottom(1)
+
+	d.styles.selected = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#000000")).
+		Background(lipgloss.Color("#00FF00")).
+		Padding(0, 0, 0, 2).
+		MarginBottom(1)
+
+	return d
+}
+
+func (d chatDelegate) Height() int {
+	return 3
+}
+
+func (d chatDelegate) Spacing() int {
+	return 0
+}
+
+func (d chatDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d chatDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	i, ok := listItem.(chatItem)
+	if !ok {
+		return
+	}
+
+	title := i.Title()
+	desc := i.Description()
+
+	str := fmt.Sprintf("%s\n%s", title, desc)
+
+	fn := d.styles.normal.Render
+	if index == m.Index() {
+		fn = d.styles.selected.Render
+	}
+
+	fmt.Fprint(w, fn(str))
+}
+
+func (i chatItem) FilterValue() string {
+	return i.chat.Name
+}
+
+func (i chatItem) Title() string {
+	return i.chat.Name
+}
+
+func (i chatItem) Description() string {
+	return fmt.Sprintf("Project: %s | Created: %s | Messages: %d",
+		i.chat.ProjectName,
+		i.chat.CreatedAt.Format("2006-01-02 15:04:05"),
+		len(i.chat.Messages))
+}
+
+func (m *model) initializeChatList() error {
+	if err := os.MkdirAll(m.chatsFolderPath, 0755); err != nil {
+		return fmt.Errorf("failed to create chats directory: %w", err)
+	}
+
+	chats, err := loadChats(m.chatsFolderPath)
+	if err != nil {
+		return fmt.Errorf("failed to load chats: %w", err)
+	}
+
+	items := make([]list.Item, 0, len(chats)+1)
+	items = append(items, chatItem{Chat{Name: "Create New Chat", ProjectName: ""}})
+	for _, chat := range chats {
+		items = append(items, chatItem{chat})
+	}
+
+	delegate := newChatDelegate()
+	m.chatList = list.New(items, delegate, m.width, m.height-4)
+	m.chatList.Title = "Chat List"
+	m.chatList.SetShowStatusBar(false)
+	m.chatList.SetFilteringEnabled(true)
+	m.chatList.Styles.Title = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Background(lipgloss.Color("#666666")).
+		Padding(0, 1)
+
+	m.chatList.Styles.NoItems = lipgloss.NewStyle().Margin(1, 2)
+	m.chatList.SetSize(m.width, m.height-4)
+
+	return nil
+}
+
+func (m *model) updateChatList(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		headerHeight := 3
+		m.chatList.SetSize(msg.Width-2, msg.Height-headerHeight)
+		return m, nil
+
+	case tea.KeyMsg:
+		switch keypress := msg.String(); keypress {
+		case "up", "k":
+			if m.chatList.Index() > 0 {
+				m.chatList.CursorUp()
+			}
+			return m, nil
+
+		case "down", "j":
+			if m.chatList.Index() < len(m.chatList.Items())-1 {
+				m.chatList.CursorDown()
+			}
+			return m, nil
+
+		case "enter":
+			selectedItem := m.chatList.SelectedItem()
+			if selectedItem == nil {
+				return m, nil
+			}
+
+			if chatItem, ok := selectedItem.(chatItem); ok {
+				if chatItem.chat.Name == "Create New Chat" {
+					m.viewMode = NewChatFormView
+					m.formActive = true
+					m.newChatName = ""
+					m.newProjectName = ""
+					m.newChatForm = createNewChatForm(&m.newChatName, &m.newProjectName)
+					return m, nil
+				}
+
+				m.selectedChat = &chatItem.chat
+				m.conversationHistory = chatItem.chat.Messages
+				m.viewMode = ChatView
+				m.updateViewport()
+				return m, nil
+			}
+		}
+	}
+
+	m.chatList, cmd = m.chatList.Update(msg)
+	return m, cmd
+}
+
+func (m *model) createNewChat(name string, projectName string) error {
+	chat := createNewChat(name, projectName)
+
+	if err := saveChat(chat, m.chatsFolderPath); err != nil {
+		return fmt.Errorf("failed to save new chat: %w", err)
+	}
+
+	m.chatList.InsertItem(1, chatItem{chat})
+
+	m.selectedChat = &chat
+	m.conversationHistory = []map[string]string{}
+	m.viewMode = ChatView
+
+	return nil
+}
+
+func createNewChatForm(name *string, projectName *string) *huh.Form {
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Chat Name").
+				Placeholder("Enter a name for the new chat").
+				Value(name).
+				Validate(func(s string) error {
+					if strings.TrimSpace(s) == "" {
+						return fmt.Errorf("chat name cannot be empty")
+					}
+					if len(s) > 50 {
+						return fmt.Errorf("chat name too long (max 50 characters)")
+					}
+					return nil
+				}),
+
+			huh.NewInput().
+				Title("Project Name").
+				Placeholder("Enter the project name").
+				Value(projectName).
+				Validate(func(s string) error {
+					if strings.TrimSpace(s) == "" {
+						return fmt.Errorf("project name cannot be empty")
+					}
+					if len(s) > 100 {
+						return fmt.Errorf("project name too long (max 100 characters)")
+					}
+					return nil
+				}),
+		),
+	).WithShowHelp(true)
+	form.NextField()
+	form.PrevField()
+	return form
+}
+
+func createAgentForm(agent *Agent, modelVersions []string, availableTools []Tool) *huh.Form {
+	if agent.SelectedTools == nil {
+		agent.SelectedTools = []string{}
+	}
+
+	modelOptions := make([]huh.Option[string], 0, len(modelVersions))
+	for _, mv := range modelVersions {
+		modelOptions = append(modelOptions, huh.NewOption(mv, mv))
+	}
+
+	toolOptions := make([]huh.Option[string], 0, len(availableTools))
+	for _, tool := range availableTools {
+		toolOptions = append(toolOptions, huh.NewOption(tool.Name, tool.Name))
+	}
+
+	tokenOptions := []huh.Option[string]{
+		huh.NewOption("2048 tokens", "2048"),
+		huh.NewOption("4096 tokens", "4096"),
+		huh.NewOption("8192 tokens", "8192"),
+		huh.NewOption("16384 tokens", "16384"),
+	}
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Role").
+				Placeholder("Enter a unique role identifier").
+				Value(&agent.Role),
+
+			huh.NewSelect[string]().
+				Title("Model Version").
+				Options(modelOptions...).
+				Value(&agent.ModelVersion),
+
+			huh.NewText().
+				Title("System Prompt").
+				Value(&agent.SystemPrompt),
+
+			huh.NewSelect[bool]().
+				Title("Use Context File").
+				Options(
+					huh.NewOption("Yes", true),
+					huh.NewOption("No", false),
+				).
+				Value(&agent.UseContext),
+
+			huh.NewInput().
+				Value(&agent.ContextFilePath).
+				TitleFunc(func() string {
+					if agent.UseContext {
+						return "Context File Path"
+					}
+					return "Context Status"
+				}, &agent.UseContext).
+				PlaceholderFunc(func() string {
+					if agent.UseContext {
+						return "/path/to/your/context/file"
+					}
+					return "No context file selected"
+				}, &agent.UseContext).
+				Validate(func(s string) error {
+					if !agent.UseContext {
+						return nil
+					}
+					if s == "" {
+						return fmt.Errorf("context file path is required when context is enabled")
+					}
+					if _, err := os.Stat(s); err != nil {
+						return fmt.Errorf("file not found: %s", s)
+					}
+					return nil
+				}),
+
+			huh.NewSelect[bool]().
+				Title("Use Conversation History").
+				Options(
+					huh.NewOption("Yes", true),
+					huh.NewOption("No", false),
+				).
+				Value(&agent.UseConversation),
+
+			huh.NewSelect[string]().
+				Title("Token Limit").
+				Options(tokenOptions...).
+				Value(&agent.Tokens),
+
+			huh.NewMultiSelect[string]().
+				Title("Tools").
+				Options(toolOptions...).
+				Value(&agent.SelectedTools),
+		),
+	).WithShowHelp(true)
+	form.NextField()
+	form.PrevField()
+
+	return form
+}
+
+func createConfirmForm(title string, confirmResult *bool) *huh.Form {
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title(title).
+				Affirmative("Yes").
+				Negative("No").
+				Value(confirmResult),
+		),
+	).WithShowHelp(false)
+	return form
+}
+
 // WIP: image inputs for mm models
 func (m *model) loadImageAsBase64(path string) (string, error) {
 	data, err := os.ReadFile(path)
@@ -898,20 +925,6 @@ func (m *model) populateAgentsTable() {
 	if m.viewMode == AgentView && m.agentsTable.Focused() && len(rows) > 0 {
 		m.agentsTable.SetCursor(0)
 	}
-}
-
-type initialTransitionMsg struct{}
-
-func (m *model) Init() tea.Cmd {
-	return tea.Batch(
-		textarea.Blink,
-		tea.EnterAltScreen,
-		fetchModelsCmd(),
-		m.spinner.Tick,
-		func() tea.Msg {
-			return initialTransitionMsg{}
-		},
-	)
 }
 
 func (m *model) toggleOllamaServe() tea.Cmd {
@@ -1333,7 +1346,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.modelTable.Blur()
 				m.availableTable.Blur()
 				m.parameterSizesTable.Blur()
-				return m, nil
+				return m, fetchModelsCmd()
 			}
 		case "l":
 			if m.viewMode == ChatView {
@@ -1670,7 +1683,7 @@ Important: Always use the check_go_code tool on any Go code you receive. Do not 
 		},
 	}
 
-	// mm support
+	// WIP: mm support
 	if strings.Contains(agent.ModelVersion, "llava") || strings.Contains(agent.ModelVersion, "bakllava") {
 		for _, msg := range messages {
 			if strings.Contains(msg["content"], "![") && strings.Contains(msg["content"], "](data:image") {
@@ -2025,12 +2038,6 @@ func (m *model) handleEnterKey() (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
-	if m.viewMode == FilePickerView {
-		return fmt.Sprintf(
-			"Select an image file:\n\n%s\n\n(press esc to cancel)",
-			m.filePicker.View(),
-		)
-	}
 	if m.errorMessage != "" {
 		return fmt.Sprintf(
 			"%s\n\nPress 'r' to retry or any other key to continue.",
@@ -2038,10 +2045,6 @@ func (m model) View() string {
 		)
 	}
 
-	return m.ViewWithoutError()
-}
-
-func (m model) ViewWithoutError() string {
 	if m.formActive {
 		switch m.viewMode {
 		case NewChatFormView:
@@ -2062,6 +2065,11 @@ func (m model) ViewWithoutError() string {
 	}
 
 	switch m.viewMode {
+	case FilePickerView:
+		return fmt.Sprintf(
+			"Select an image file:\n\n%s\n\n(press esc to cancel)",
+			m.filePicker.View(),
+		)
 	case ChatListView:
 		header := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FFFFFF")).
@@ -2249,7 +2257,6 @@ func sendChatMessage(m *model) tea.Cmd {
 			return nil
 		}
 
-		// Add user message to conversation history
 		m.conversationHistory = append(m.conversationHistory, map[string]string{
 			"role":    "user",
 			"content": m.currentUserMessage,
@@ -2270,7 +2277,6 @@ func sendChatMessage(m *model) tea.Cmd {
 			lastResponse = response
 			currentInput = response
 
-			// Add each agent's response to conversation history
 			m.conversationHistory = append(m.conversationHistory, map[string]string{
 				"role":    "assistant",
 				"content": response,
@@ -2392,47 +2398,6 @@ func executeGolangciLint(code string, agentRole string, m *model) (string, error
 	}
 
 	return resultBuilder.String(), nil
-}
-
-func (m *model) updateViewport() {
-	var conversation strings.Builder
-	titleCaser := cases.Title(language.English)
-
-	for _, msg := range m.conversationHistory {
-		role := titleCaser.String(msg["role"])
-		content := msg["content"]
-
-		switch strings.ToLower(role) {
-		case "user":
-			conversation.WriteString(fmt.Sprintf("**%s:**\n\n%s\n\n", role, content))
-		case "assistant":
-			conversation.WriteString(fmt.Sprintf("**%s:**\n\n%s\n\n", role, content))
-		case "tool":
-			conversation.WriteString(fmt.Sprintf("**%s:**\n\n```plaintext\n%s\n```\n\n", role, content))
-		default:
-			conversation.WriteString(fmt.Sprintf("**%s:**\n\n%s\n\n", role, content))
-		}
-	}
-
-	renderedContent, err := m.renderer.Render(conversation.String())
-	if err != nil {
-		log.Printf("Error rendering conversation: %v", err)
-		return
-	}
-	m.viewport.SetContent(renderedContent)
-	m.viewport.GotoBottom()
-	m.viewport.Height = m.height - 3
-}
-
-type OllamaModel struct {
-	Name       string    `json:"name"`
-	Model      string    `json:"model"`
-	ModifiedAt time.Time `json:"modified_at"`
-	Size       int64     `json:"size"`
-	Details    struct {
-		ParameterSize     string `json:"parameter_size"`
-		QuantizationLevel string `json:"quantization_level"`
-	} `json:"details"`
 }
 
 func requestOllama(messages []map[string]string, agent Agent) (string, error) {
@@ -2628,20 +2593,7 @@ func parseContent(doc *goquery.Document) []AvailableModel {
 	return models
 }
 
-type AvailableModel struct {
-	Name  string   `json:"name"`
-	Sizes []string `json:"sizes"`
-}
-
-type PullResponse struct {
-	Status    string  `json:"status"`
-	Digest    string  `json:"digest,omitempty"`
-	Total     int64   `json:"total,omitempty"`
-	Completed int64   `json:"completed,omitempty"`
-	Progress  float64 `json:"progress,omitempty"`
-}
-
-func downloadModelUsingAPI(modelName string) error {
+func downloadModel(modelName string) error {
 	requestBody, err := json.Marshal(map[string]string{
 		"name": modelName,
 	})
@@ -2686,7 +2638,7 @@ func downloadModelUsingAPI(modelName string) error {
 
 func downloadModelCmd(modelName string) tea.Cmd {
 	return func() tea.Msg {
-		if err := downloadModelUsingAPI(modelName); err != nil {
+		if err := downloadModel(modelName); err != nil {
 			return errMsg(fmt.Errorf("failed to download model: %w", err))
 		}
 		return modelDownloadedMsg(modelName)
@@ -2695,6 +2647,45 @@ func downloadModelCmd(modelName string) tea.Cmd {
 
 func keyIsCtrlZ(msg tea.KeyMsg) bool {
 	return msg.Type == tea.KeyCtrlZ
+}
+
+func triggerWindowResize(width, height int) tea.Cmd {
+	return func() tea.Msg {
+		return tea.WindowSizeMsg{
+			Width:  width,
+			Height: height,
+		}
+	}
+}
+
+func (m *model) updateViewport() {
+	var conversation strings.Builder
+	titleCaser := cases.Title(language.English)
+
+	for _, msg := range m.conversationHistory {
+		role := titleCaser.String(msg["role"])
+		content := msg["content"]
+
+		switch strings.ToLower(role) {
+		case "user":
+			conversation.WriteString(fmt.Sprintf("**%s:**\n\n%s\n\n", role, content))
+		case "assistant":
+			conversation.WriteString(fmt.Sprintf("**%s:**\n\n%s\n\n", role, content))
+		case "tool":
+			conversation.WriteString(fmt.Sprintf("**%s:**\n\n```plaintext\n%s\n```\n\n", role, content))
+		default:
+			conversation.WriteString(fmt.Sprintf("**%s:**\n\n%s\n\n", role, content))
+		}
+	}
+
+	renderedContent, err := m.renderer.Render(conversation.String())
+	if err != nil {
+		log.Printf("Error rendering conversation: %v", err)
+		return
+	}
+	m.viewport.SetContent(renderedContent)
+	m.viewport.GotoBottom()
+	m.viewport.Height = m.height - 3
 }
 
 func main() {
