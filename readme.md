@@ -28,6 +28,7 @@ agentui is a TUI client for managing AI agents, conducting multi-agent conversat
 
 ![Model Management](media/model_management.png)
 ![AgentUI Screenshot](media/screenshot1.png)
+
 **⚙️ Technical Features**
 
 - Terminal UI with responsive design
