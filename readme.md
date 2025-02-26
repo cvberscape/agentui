@@ -12,15 +12,21 @@ agentui is a TUI client for managing AI agents, conducting multi-agent conversat
 - Configurable agents for your specific needs
 - Tool integration system (e.g., code checking)
 
+![Agent Management](media/agent_management.png)
+
 **💬 Chat System**
 
 - Persistent chat history with project organization
-- Markdown rendering in the terminal with
+- Markdown rendering in the terminal
+
+![Chat System](media/chat_system.png)
 
 **🛠️ Model Management**
 
 - Browse Ollama model library
 - Install/delete models directly
+
+![Model Management](media/model_management.png)
 
 **⚙️ Technical Features**
 

@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 
@@ -39,7 +38,6 @@ func fetchModelsCmd() tea.Cmd {
 	return func() tea.Msg {
 		models, err := fetchModels()
 		if err != nil {
-			log.Printf("Failed to fetch models: %v", err)
 			// Return an empty modelsMsg to ensure the table still renders
 			return modelsMsg{}
 		}
