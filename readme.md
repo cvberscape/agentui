@@ -1,6 +1,6 @@
 # agentui: Client for configurable agentic workflows in the terminal
 
-agentui is a TUI client for managing AI agents, conducting multi-agent conversations, and interacting with local LLMs through Ollama. Designed for developers working with AI workflows, it combines chat functionality with agent management inside a terminal.
+agentui is a TUI client for managing AI agents, conducting multi-agent conversations, and interacting with local LLMs through Ollama. Designed for developers working with AI workflows, it combines chat functionality with agent management inside a terminal. agentui is entirely written in Go with the Bubble Tea framework.
 
 🚧 Work in Progress: This project is under active development. Some features are incomplete or experimental, and bugs are expected.
 
@@ -27,7 +27,7 @@ agentui is a TUI client for managing AI agents, conducting multi-agent conversat
 - Install/delete models directly
 
 ![Model Management](media/model_management.png)
-
+![AgentUI Screenshot](media/screenshot1.png)
 **⚙️ Technical Features**
 
 - Terminal UI with responsive design
