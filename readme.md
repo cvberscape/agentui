@@ -1,83 +1,117 @@
-# agentui
+# agentui: Client for configurable agentic workflows in the terminal
 
-## TODO
+agentui is a TUI client for managing AI agents, conducting multi-agent conversations, and interacting with local LLMs through Ollama. Designed for developers working with AI workflows, it combines chat functionality with agent management inside a terminal.
 
-- support for multimodal models // WIP
-- more robust agent customization (api parameters)
-- make chat more responsive, currently chat re-renders once the entire agent chain is processed which works but is not ideal for user experience. more responsive re-renders and streaming for non tool-calling agents
-- bindings for adding external tools (bash or python scripts etc)
-- customizable signals for agent processing
-- efficiency/QOL features for chat interface
-- more refined/aesthetic UI
-- optimizations
-- should probably modularize the code to make it more readable rather than having 2.7k lines of code slapped into a single main.go file, i just prefer it this way for now
+🚧 Work in Progress: This project is under active development. Some features are incomplete or experimental, and bugs are expected.
 
-## Running the app
+## Features
 
-```sh
+**🤖 AI Agent Management**
+
+- Create and sequence specialized agents with custom roles
+- Configurable agents for your specific needs
+- Tool integration system (e.g., code checking)
+
+**💬 Chat System**
+
+- Persistent chat history with project organization
+- Markdown rendering in the terminal with
+
+**🛠️ Model Management**
+
+- Browse Ollama model library
+- Install/delete models directly
+
+**⚙️ Technical Features**
+
+- Terminal UI with responsive design
+- Local data persistence
+- Vim-like keyboard shortcuts
+
+## Getting Started
+
+### Dependencies
+
+- Go
+- Ollama
+- Terminal emulator supporting UTF-8
+
+### Running
+
+```bash
 git clone https://github.com/CVBERSCAPE/agentui.git
-```
-
-```sh
 cd agentui
-```
-
-```sh
-go mod tidy
-```
-
-```sh
 go run .
 ```
 
-should work out of the box on any unix system but untested, tested system config: artix linux and alacritty/kitty as terminal emulators
+## Usage
 
-currently all persistent data (chats, agent configs) are saved at the root dir of the project, this is easier for now for testing purposes, will be changed to persist at .config at some point
+### Key Bindings
 
-the app also contains quite a bit of logging code for now which might obstruct the ui on occasion
+| **Context**        | **Key**  | **Action**                                              |
+| ------------------ | -------- | ------------------------------------------------------- |
+| **Global**         | `Ctrl+Z` | Exit application                                        |
+|                    | `Esc`    | Return to the previous view (usually back to Chat View) |
+| **Chat View**      | `i`      | Enter message input (Insert Mode)                       |
+|                    | `l`      | Open chat list                                          |
+|                    | `m`      | Open model view                                         |
+|                    | `g`      | Open agent view                                         |
+|                    | `f`      | Open file picker _(Work in Progress)_                   |
+|                    | `o`      | Toggle Ollama server                                    |
+|                    | `j` / ↓  | Scroll down                                             |
+|                    | `k` / ↑  | Scroll up                                               |
+| **Insert View**    | `Enter`  | Send message                                            |
+|                    | `Esc`    | Exit insert mode                                        |
+| **Chat List View** | `Enter`  | Select/create new chat                                  |
+|                    | `/`      | Search chats                                            |
+| **Model View**     | `Enter`  | Select model in table                                   |
+|                    | `d`      | Delete hovered model                                    |
+| **Agent View**     | `Enter`  | Add/edit agent (depending on selection)                 |
+|                    | `a`      | Add new agent                                           |
+|                    | `e`      | Edit selected agent                                     |
+|                    | `d`      | Delete agent                                            |
+|                    | `u`      | Move hovered agent up in the chain                      |
+|                    | `y`      | Move hovered agent down in the chain                    |
 
-## Dependencies
+### Basic Workflow
 
-- Go (make)
-- Ollama
-- golangci-lint (Optional, for the go linter tool)
+1. **Start Ollama**: Press `o` to toggle Ollama service
+2. **Create Agents**:
+   - Press `g` to enter Agent View
+   - Use `a` to add new agents with custom roles
+3. **Start Chatting**:
+   - Press `i` to compose messages
+   - Agents process input sequentially
+4. **Manage Models**:
+   - Press `m` to browse/install models
+   - Enter to select, `d` to delete
 
-## Keybindings
+## Use Cases
 
-    Global
-        Ctrl+Z: exits the app
-        ESC: works as a return (usually ends up back in chat view)
-        
-    Chat View
-        i: enter insert mode to send messages
-        l: open chat list
-        m: open model view
-        g: open agent view
-        f: open file picker (WORK IN PROGRESS)
-        o: toggle ollama server
-        j / Down Arrow: scroll down
-        k / Up Arrow: scroll up
+**👩💻 Code Collaboration**
 
-    Insert View (when typing a user message)
-        Enter: send message
-        ESC: exit insert mode
+- Chain code generator + tester agents
+- Integrated Go code checking tool
+- Context-aware programming assistance
 
-    Chat List View
-        Enter: select/create new chat
-        /: search
+**🔄 Multi-Agent Workflows**
 
-    Model View
-        Enter: works as selector in table
-        d: delete hovered model
+- Sequential processing pipelines
+- Specialized agent roles, for example: research, analysis and summarization
 
-    Agent View
-        Enter: add/edit agent depending on hovered selection
-        a: add new agent
-        e: edit selected agent
-        d: delete agent
-        u: move hovered agent up 1 entry in the table (agents are processed sequentially, from the top of the table to the bottom)
-        y: move hovered agent down 1 entry in the table (agents are processed sequentially, from the top of the table to the bottom)
+## Future Roadmap
 
-## Observations
+- 🖼️ Multi-modal support
+- 🔌 Bindings for external tools
+- 🤖 More robust agent configuration
+- ⚡ Customizable agent processing with dynamic, user-defined signals
+- 🚀 Performance optimizations
+- 🛠 Quality-of-Life Enhancements
+- 🎨 A more refined and aesthetic interface
 
-For now the best performing model for coding/tool tasks is gwen2.5-coder, other tested models like llama3.1 at lower parameter sizes are quite underwhelming, especially for tool usage. this *should* change when deepseek r1 is released as an oss model
+## Configuration
+
+Persistent data stored in project root for now for testing purposes, will be changed to .config/ at a latertime:
+
+- `agents.json`: Agent configurations
+- `chats/`: Chat history files
