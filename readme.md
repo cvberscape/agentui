@@ -4,6 +4,17 @@ agentui is a TUI client for managing AI agents, conducting multi-agent conversat
 
 🚧 Work in Progress: This project is under active development. Some features are incomplete or experimental, and bugs are expected.
 
+## Future Roadmap
+
+- Passing files/repositories as context
+- Multi-modal support
+- Bindings for external tools
+- More robust agent configuration
+- Customizable agent processing with dynamic, user-defined signals
+- Performance optimizations
+- Quality-of-Life Enhancements
+- A more refined and aesthetic interface
+
 ## Features
 
 **🤖 AI Agent Management**
@@ -105,16 +116,6 @@ go run .
 
 - Sequential processing pipelines
 - Specialized agent roles, for example: research, analysis and summarization
-
-## Future Roadmap
-
-- 🖼️ Multi-modal support
-- 🔌 Bindings for external tools
-- 🤖 More robust agent configuration
-- ⚡ Customizable agent processing with dynamic, user-defined signals
-- 🚀 Performance optimizations
-- 🛠 Quality-of-Life Enhancements
-- 🎨 A more refined and aesthetic interface
 
 ## Configuration
 
