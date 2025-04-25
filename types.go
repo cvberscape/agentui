@@ -32,10 +32,10 @@ const (
 )
 
 const (
-	defaultSystemPrompt     = "You are an assistant tasked with generating code based on the user's prompt. Use the following context to generate the best solution. Context: {context}"
+	defaultSystemPrompt     = ""
 	defaultContextFilePath  = ""
-	defaultTokens           = "16384"
-	defaultModelVersion     = "llama3.1"
+	defaultTokens           = "2048"
+	defaultModelVersion     = ""
 	ollamaAPIURL            = "http://localhost:11434/api"
 	defaultIndicatorPrompt  = "│"
 	configFormTitle         = "Chat Configuration"

@@ -142,20 +142,12 @@ func InitialModel() *model {
 		log.Printf("Error loading agents from file: %v", err)
 		m.agents = append(m.agents, Agent{
 			Role:            "Assistant",
-			ModelVersion:    "llama3.1",
-			SystemPrompt:    "You are an assistant tasked with generating code based on the user's prompt.",
+			ModelVersion:    "",
+			SystemPrompt:    "",
 			UseContext:      false,
 			ContextFilePath: "",
 			UseConversation: false,
-			Tokens:          "16384",
-		}, Agent{
-			Role:            "Tester",
-			ModelVersion:    "llama3.1",
-			SystemPrompt:    "You are a code tester tasked with reviewing the following code for potential bugs or issues.",
-			UseContext:      false,
-			ContextFilePath: "",
-			UseConversation: true,
-			Tokens:          "16384",
+			Tokens:          "2048",
 		})
 
 		err = saveAgents(m)
