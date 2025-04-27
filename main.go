@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/filepicker"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -15,6 +16,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/google/uuid"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
@@ -25,9 +27,6 @@ func (m *model) Init() tea.Cmd {
 		tea.EnterAltScreen,
 		fetchModelsCmd(),
 		m.spinner.Tick,
-		func() tea.Msg {
-			return initialTransitionMsg{}
-		},
 	)
 }
 
@@ -167,6 +166,16 @@ func InitialModel() *model {
 	m.availableModelVersions = []string{defaultModelVersion}
 
 	m.updateTextareaIndicatorColor()
+
+	tempChat := Chat{
+		ID:          "temp-" + uuid.New().String(),
+		Name:        "Temporary Chat",
+		ProjectName: "Temporary",
+		CreatedAt:   time.Now(),
+		Messages:    make([]map[string]string, 0),
+	}
+	m.selectedChat = &tempChat
+	m.conversationHistory = tempChat.Messages
 
 	m.chatsFolderPath = "./chats"
 	if err = m.initializeChatList(); err != nil {
@@ -1046,6 +1055,7 @@ func (m *model) updateViewport() {
 
 func main() {
 	model := InitialModel()
+	model.viewMode = ChatView // Ensure we start in ChatView
 	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		os.Exit(1)

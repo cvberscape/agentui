@@ -89,7 +89,8 @@ func (m *model) initializeChatList() error {
 		return fmt.Errorf("failed to load chats: %w", err)
 	}
 
-	items := make([]list.Item, 0, len(chats)+1)
+	items := make([]list.Item, 0, len(chats)+2)
+	items = append(items, chatItem{Chat{Name: "Temporary Chat", ProjectName: ""}})
 	items = append(items, chatItem{Chat{Name: "Create New Chat", ProjectName: ""}})
 	for _, chat := range chats {
 		items = append(items, chatItem{chat})
@@ -151,6 +152,20 @@ func (m *model) updateChatList(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.newChatName = ""
 					m.newProjectName = ""
 					m.newChatForm = createNewChatForm(&m.newChatName, &m.newProjectName)
+					return m, nil
+				} else if chatItem.chat.Name == "Temporary Chat" {
+					// Create new temporary chat
+					tempChat := Chat{
+						ID:          "temp-" + uuid.New().String(),
+						Name:        "Temporary Chat",
+						ProjectName: "Temporary",
+						CreatedAt:   time.Now(),
+						Messages:    make([]map[string]string, 0),
+					}
+					m.selectedChat = &tempChat
+					m.conversationHistory = tempChat.Messages
+					m.viewMode = ChatView
+					m.updateViewport()
 					return m, nil
 				}
 
@@ -250,6 +265,10 @@ func (m *model) handleChatSelection(chat *Chat) {
 func (m *model) saveCurrentChat() error {
 	if m.selectedChat == nil {
 		return fmt.Errorf("no chat selected")
+	}
+
+	if strings.HasPrefix(m.selectedChat.ID, "temp-") {
+		return nil
 	}
 
 	m.selectedChat.Messages = m.conversationHistory
