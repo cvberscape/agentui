@@ -139,6 +139,10 @@ func (m *model) updateChatList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case "esc":
+			m.viewMode = ChatView
+			return m, nil
+
 		case "enter":
 			selectedItem := m.chatList.SelectedItem()
 			if selectedItem == nil {
