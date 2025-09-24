@@ -2,22 +2,11 @@
 
 agentui is a TUI client for managing AI agents, conducting multi-agent conversations, and interacting with local LLMs through Ollama. Designed for developers working with AI workflows, it combines chat functionality with agent management inside a terminal. agentui is entirely written in Go with the Bubble Tea framework.
 
-🚧 Work in Progress: This project is under active development. Some features are incomplete or experimental, and bugs are expected.
-
-## Future Roadmap
-
-- Passing files/repositories as context
-- Multi-modal support
-- Bindings for external tools
-- More robust agent configuration
-- Customizable agent processing with dynamic, user-defined signals
-- Performance optimizations
-- Quality-of-Life Enhancements
-- A more refined and aesthetic interface
+This project was made during my last year of school in 2024.
 
 ## Features
 
-**🤖 AI Agent Management**
+**AI Agent Management**
 
 - Create and sequence specialized agents with custom roles
 - Configurable agents for your specific needs
@@ -25,14 +14,14 @@ agentui is a TUI client for managing AI agents, conducting multi-agent conversat
 
 ![Agent Management](media/agent_management.png)
 
-**💬 Chat System**
+**Chat System**
 
 - Persistent chat history with project organization
 - Markdown rendering in the terminal
 
 ![Chat System](media/chat_system.png)
 
-**🛠️ Model Management**
+**Model Management**
 
 - Browse Ollama model library
 - Install/delete models directly
@@ -40,7 +29,7 @@ agentui is a TUI client for managing AI agents, conducting multi-agent conversat
 ![Model Management](media/model_management.png)
 ![AgentUI Screenshot](media/screenshot1.png)
 
-**⚙️ Technical Features**
+**Technical Features**
 
 - Terminal UI with responsive design
 - Local data persistence
@@ -106,20 +95,20 @@ go run .
 
 ## Use Cases
 
-**👩💻 Code Collaboration**
+** Code Collaboration**
 
 - Chain code generator + tester agents
 - Integrated Go code checking tool
 - Context-aware programming assistance
 
-**🔄 Multi-Agent Workflows**
+**Multi-Agent Workflows**
 
 - Sequential processing pipelines
 - Specialized agent roles, for example: research, analysis and summarization
 
 ## Configuration
 
-Persistent data stored in project root for now for testing purposes, will be changed to .config/ at a latertime:
+Agent configuration and chat data is stored at project root
 
 - `agents.json`: Agent configurations
 - `chats/`: Chat history files
